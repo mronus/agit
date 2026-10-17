@@ -1,0 +1,68 @@
+git-provenance(1)
+=================
+
+NAME
+----
+git-provenance - Show and verify AI provenance records of commits
+
+
+SYNOPSIS
+--------
+[synopsis]
+git provenance show [--reasoning] <commit>
+git provenance verify [<commit>...]
+
+DESCRIPTION
+-----------
+
+Provenance records describe how the changes of a commit were made: a
+line record says which added and removed lines were written by an AI
+agent, by a human, or by both, and a reasoning record says why the
+commit was made.  Records are stored as notes under
+`refs/provenance/lines` and `refs/provenance/reasoning`, keyed by the
+commit they describe, so a commit can carry provenance without its
+object id changing.  See
+`Documentation/technical/git-provenance-format.adoc` for the record
+formats.
+
+This command reads and checks records.  It does not create them; see
+linkgit:git-notes[1] for a way to attach a record by hand.
+
+COMMANDS
+--------
+
+`show [--reasoning] <commit>`::
+	Print the line record attached to _<commit>_ as it is stored.
+	With `--reasoning`, print the reasoning record instead.
+
+`verify [<commit>...]`::
+	Check the line record attached to each _<commit>_ (`HEAD` if
+	none is given) against the commit, and print one line per
+	commit: `<object-id> ok` if the record verifies, or
+	`<object-id> no record` if the commit has no line record.  If the
+	record does not verify, describe the first problem found on
+	standard error.
++
+A record verifies if it is well formed, names the commit it is
+attached to, uses only declared actors, uses the `UNKNOWN` mark only
+in records with `capture adopted`, and each of its ranges lies within
+the file it names (in the commit for `+` ranges, in its first parent
+for `-` ranges) and matches its anchor.
+
+OPTIONS
+-------
+
+`--reasoning`::
+	Show the reasoning record instead of the line record.
+
+EXIT STATUS
+-----------
+
+`show` exits with status 0 if the record exists, and 1 if it does
+not.  `verify` exits with status 0 if every record that exists
+verifies, and 1 otherwise; a commit without a record is not a
+failure.  Both exit with status 128 if an argument is not a commit.
+
+GIT
+---
+Part of the linkgit:git[1] suite

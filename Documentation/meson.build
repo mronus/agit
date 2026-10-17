@@ -102,6 +102,7 @@ manpages = {
   'git-pack-objects.adoc' : 1,
   'git-pack-refs.adoc' : 1,
   'git-patch-id.adoc' : 1,
+  'git-provenance.adoc' : 1,
   'git-prune-packed.adoc' : 1,
   'git-prune.adoc' : 1,
   'git-pull.adoc' : 1,

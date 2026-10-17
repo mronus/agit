@@ -47,6 +47,7 @@ test_tool_sources = [
   'test-pkt-line.c',
   'test-proc-receive.c',
   'test-progress.c',
+  'test-provenance.c',
   'test-reach.c',
   'test-read-cache.c',
   'test-read-graph.c',

@@ -123,6 +123,7 @@
 /git-pack-objects
 /git-pack-refs
 /git-patch-id
+/git-provenance
 /git-prune
 /git-prune-packed
 /git-pull

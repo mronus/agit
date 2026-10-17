@@ -125,6 +125,7 @@ TECH_DOCS += technical/commit-graph
 TECH_DOCS += technical/directory-rename-detection
 TECH_DOCS += technical/git-architecture
 TECH_DOCS += technical/git-provenance
+TECH_DOCS += technical/git-provenance-format
 TECH_DOCS += technical/hash-function-transition
 TECH_DOCS += technical/large-object-promisors
 TECH_DOCS += technical/long-running-process-protocol

@@ -369,6 +369,7 @@ integration_tests = [
   't3309-notes-merge-auto-resolve.sh',
   't3310-notes-merge-manual-resolve.sh',
   't3311-notes-merge-fanout.sh',
+  't3312-provenance.sh',
   't3320-notes-merge-worktrees.sh',
   't3321-notes-stripspace.sh',
   't3400-rebase.sh',

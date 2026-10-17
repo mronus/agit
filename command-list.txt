@@ -152,6 +152,7 @@ git-pack-objects                        plumbingmanipulators
 git-pack-redundant                      plumbinginterrogators
 git-pack-refs                           ancillarymanipulators
 git-patch-id                            purehelpers
+git-provenance                          plumbinginterrogators
 git-prune                               ancillarymanipulators   complete
 git-prune-packed                        plumbingmanipulators
 git-pull                                mainporcelain           remote

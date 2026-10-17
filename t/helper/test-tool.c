@@ -59,6 +59,7 @@ static struct test_cmd cmds[] = {
 	{ "pkt-line", cmd__pkt_line },
 	{ "proc-receive", cmd__proc_receive },
 	{ "progress", cmd__progress },
+	{ "provenance", cmd__provenance },
 	{ "reach", cmd__reach },
 	{ "read-cache", cmd__read_cache },
 	{ "read-graph", cmd__read_graph },
