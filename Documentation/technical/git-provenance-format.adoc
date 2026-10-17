@@ -226,3 +226,69 @@ attached to.  It reports the first failure it finds and checks that:
 
 Whether the ranges cover exactly the lines changed by the commit, and
 the content of reasoning records, are not verified yet.
+
+
+Capture journal
+---------------
+
+The capture journal records the stamps that AI agents make with
+`git stamp` while they edit files, until a commit consumes
+them.  It is local state: it lives in the git directory of each
+worktree, at `$GIT_DIR/provenance/journal`, so every linked worktree
+has a journal of its own, and it is never transferred.
+
+The journal is a text file with LF line endings and one entry per
+line.  Entries are only ever appended, in the order in which they are
+made; a writer holds `$GIT_DIR/provenance/journal.lock` while it adds
+an entry.
+
+------------
+begin <ts> <session> <tree> [model=<model>] [tool=<tool>]
+end <ts> <session> <tree>
+edit <ts> <session> <pre-blob> <post-blob> <path>
+reason <ts> <session> <summary-blob> [<transcript-blob>]
+claim <ts> <session> path <path>
+claim <ts> <session> patch <patch-blob>
+------------
+
+Fields are separated by a single space.  `<ts>` is the time of the
+stamp, in seconds since the Unix epoch.  `<session>` identifies the
+agent session that made the stamp; it is a non-empty string of the
+characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`.  `<model>` and
+`<tool>` are non-empty and contain no spaces.  A `<path>` is relative
+to the top of the working tree and is always the last field, so it may
+contain spaces; paths that contain a LF cannot be recorded.  Object ids
+are written in full, as lowercase hexadecimal, in the hash algorithm of
+the repository.
+
+`begin <ts> <session> <tree> [model=<model>] [tool=<tool>]`::
+	The session is about to change files.  `<tree>` is a snapshot of
+	the working tree taken just before.
+
+`end <ts> <session> <tree>`::
+	The session has finished changing files.  `<tree>` is a snapshot
+	of the working tree taken just after.  The changes between the
+	preceding snapshot and this one were made by the session.
+
+`edit <ts> <session> <pre-blob> <post-blob> <path>`::
+	The session changed `<path>` from the content of `<pre-blob>` to
+	that of `<post-blob>`.
+
+`reason <ts> <session> <summary-blob> [<transcript-blob>]`::
+	The session's summary of its work, and optionally its transcript.
+
+`claim <ts> <session> path <path>`::
+	The session declares that it wrote the changes to `<path>`.
+
+`claim <ts> <session> patch <patch-blob>`::
+	The session declares that it wrote the changes in the patch
+	stored in `<patch-blob>`.
+
+A snapshot is the tree that "git add -A" followed by "git write-tree"
+would produce, written without touching the index.  When a stamp is
+limited to some paths, only those paths are taken from the working
+tree and the rest of the snapshot is the index.  Snapshots and blobs
+are ordinary objects, but nothing refers to them, so `git gc` may
+prune them; a reader must treat entries whose objects are missing as
+having no content.  A reader ignores lines that do not parse, with a
+warning.
