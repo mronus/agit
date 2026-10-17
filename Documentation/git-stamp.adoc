@@ -35,10 +35,20 @@ and `-`; parallel agents use distinct session ids.
 changing the index.  Files that have not changed since they were last
 staged cost nothing, as their content is already known.
 
-The journal is kept in the git directory of the worktree, is never
-transferred, and is not used by any other command yet.  See the
-"Capture journal" section of
+The journal is kept in the git directory of the worktree and is never
+transferred.  See the "Capture journal" section of
 `Documentation/technical/git-provenance-format.adoc` for its format.
+
+linkgit:git-commit[1] reads the journal to tell which lines of the
+commit were written by which session, records the result as the
+provenance of the commit, and then empties the journal.  A partial
+commit, made with a pathspec, `--only` or `--include`, keeps the
+journal, as its stamps may be needed for the paths left out.  Any other
+commit consumes all stamps, including those for changes that it does
+not include, such as changes left unstaged by `git add -p`; when those
+changes are committed later, their lines are recorded as written by a
+human.  With `provenance.enabled` set to false, `git commit` leaves the
+journal alone.
 
 COMMANDS
 --------
@@ -72,7 +82,8 @@ COMMANDS
 `claim --session <id> (--patch <file> | [--] <path>...)`::
 	Declare that the session wrote the changes to the given paths, or
 	the changes in the given patch, for agents that could not stamp
-	their edits while making them.
+	their edits while making them.  A patch currently claims the
+	whole of each path that it names, not only its hunks.
 
 `list [--session <id>]`::
 	Print the entries of the journal, one per line, in the order in

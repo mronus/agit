@@ -202,7 +202,9 @@ file src/foo.c
 
 - Merge commits record only conflict resolutions and other changes
   present in neither parent; lines that merged cleanly keep their
-  provenance through `blame`.
+  provenance through `blame`.  Until this is implemented, a merge
+  concluded with `git commit` is recorded against its first parent,
+  like any other commit.
 
 - Binary files get a single file-level mark.
 
@@ -210,9 +212,9 @@ Reasoning record
 ~~~~~~~~~~~~~~~~
 One record per code commit, listing the agent sessions that
 contributed at least one surviving line, with model, tool and
-timestamps, followed by the summary the agent wrote. A record with no
-sessions states that no AI was involved; every commit made with
-provenance enabled has one.
+timestamps, followed by the summary the agent wrote. A commit made
+with provenance enabled to which no session is attached gets no
+reasoning record, which states that no AI was involved.
 
 Full transcripts are optional, policy-controlled
 (`provenance.reasoning.transcripts`), and the first thing to drop for
@@ -298,10 +300,10 @@ independent, so parallel agents use distinct session ids; overlapping
 AI intervals are still `AI`. Journal entries live in the worktree's
 git directory, are never transferred, and are deleted once a commit
 consumes them. An `end` without a preceding `begin` diffs against the
-last snapshot of the path (or the index), which is exact unless a
-human edited the same file in between; harnesses that only offer an
-after-edit hook should prefer `stamp edit` when their payload carries
-the edit.
+last snapshot of any session (or the first parent), which is exact
+unless a human edited the same file in between; harnesses that only
+offer an after-edit hook should prefer `stamp edit` when their payload
+carries the edit.
 
 The protocol is deliberately agent-agnostic: the extension knows
 nothing about any particular agent or editor, and this repository
@@ -351,7 +353,9 @@ over that chain using `xdiff` and the core of `blame.c`:
 
 3. Lines present in the working tree but not staged are not in the
    staged blob and are excluded; `git add -p` needs no special
-   handling.
+   handling.  The commit consumes their stamps all the same, unless
+   it is a partial commit (a pathspec, `--only` or `--include`), so
+   these lines are `HUMAN` when they are committed later.
 
 4. A changed file with no journal entries is `HUMAN`: the commit is
    being made with provenance enabled, so the absence of a stamp is
@@ -363,10 +367,13 @@ discarded are not attached (configurable).
 
 Commit
 ~~~~~~
-After the commit object is written and before the ref update
-completes, git computes both records and updates
+Git computes both records just before the commit object is written,
+once the message is final and the hooks have run. Once the commit
+object is written, it stores the records and updates
 `refs/provenance/lines` and `refs/provenance/reasoning` in the same
 ref transaction as the branch, so either all refs move or none do.
+The journal is then emptied, except after a partial commit.
+`provenance.enabled` (on by default) turns all of this off.
 
 `--session <id>` is how an agent that commits identifies itself. Git
 attaches that session's reasoning; if the journal has stamps for the
@@ -383,9 +390,9 @@ names the option and nothing more, and is silenced with the usual
 advice configuration. It is not printed when stamps already link the
 commit to sessions.
 
-`provenance.require` turns that warning into an error and refuses to
-commit when no agent integration is installed for the repository, for
-teams that want guaranteed coverage.
+`provenance.require` turns that advice into an error and refuses to
+make a commit that no session is linked to, for teams that want
+guaranteed coverage.
 
 Viewing
 ~~~~~~~
@@ -412,7 +419,10 @@ Git already copies notes across rewrites (`notes.rewrite.*`,
 
 amend::
 	Merge the old record with the new journal. Lines unchanged since
-	the old commit keep their marks.
+	the old commit keep their marks. Until this is implemented, the
+	amended commit gets a record computed against its parent like
+	any other commit, and the record of the replaced commit is not
+	carried over.
 
 rebase, cherry-pick (clean)::
 	Transform ranges through the new diff; anchors confirm each

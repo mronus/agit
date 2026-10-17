@@ -552,6 +552,8 @@ include::config/promisor.adoc[]
 
 include::config/protocol.adoc[]
 
+include::config/provenance.adoc[]
+
 include::config/pull.adoc[]
 
 include::config/push.adoc[]
