@@ -492,6 +492,13 @@ Hosting services::
 Leaving agit::
 	Delete `refs/agit/*`. A plain Git repository remains.
 
+The executable is `git`. `agit` is installed as an alias of the same
+program, so that agit-specific commands can be run and documented
+under that name. `agit --version` reports `git version ...`, because
+tools validate the executable by that prefix. Tools and agents that
+run `git` from `PATH` record provenance only when the installed `git`
+is agit.
+
 agit does not set `core.repositoryformatversion` or any
 `extensions.*`, because nothing it writes would be destroyed or
 misread by stock Git. Not needing the repository format extension is
