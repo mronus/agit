@@ -1,11 +1,13 @@
 #include "git-compat-util.h"
 #include "provenance.h"
 #include "commit.h"
+#include "config.h"
 #include "gettext.h"
 #include "hex.h"
 #include "object.h"
 #include "object-file.h"
 #include "odb.h"
+#include "parse.h"
 #include "refs.h"
 #include "repository.h"
 #include "strbuf.h"
@@ -350,6 +352,47 @@ void provenance_record_release(struct provenance_record *rec)
 	free(rec->files);
 	free(rec->capture_tool);
 	memset(rec, 0, sizeof(*rec));
+}
+
+void provenance_reasoning_format(const struct provenance_reasoning *rec,
+				 struct strbuf *out)
+{
+	strbuf_addf(out, "version %d\n", rec->version);
+	strbuf_addf(out, "commit %s\n", oid_to_hex(&rec->commit));
+	for (size_t i = 0; i < rec->sessions_nr; i++) {
+		const struct provenance_session *s = &rec->sessions[i];
+
+		strbuf_addf(out, "session %s model=%s tool=%s",
+			    s->id, s->model, s->tool);
+		if (s->started)
+			strbuf_addf(out, " started=%"PRItime, s->started);
+		if (s->ended)
+			strbuf_addf(out, " ended=%"PRItime, s->ended);
+		strbuf_addch(out, '\n');
+	}
+	strbuf_addch(out, '\n');
+	strbuf_addbuf(out, &rec->summary);
+}
+
+void provenance_reasoning_release(struct provenance_reasoning *rec)
+{
+	for (size_t i = 0; i < rec->sessions_nr; i++) {
+		free(rec->sessions[i].id);
+		free(rec->sessions[i].model);
+		free(rec->sessions[i].tool);
+	}
+	FREE_AND_NULL(rec->sessions);
+	rec->sessions_nr = rec->sessions_alloc = 0;
+	strbuf_release(&rec->summary);
+}
+
+int provenance_enabled(struct repository *r)
+{
+	int enabled;
+
+	if (!repo_config_get_bool(r, "provenance.enabled", &enabled))
+		return enabled;
+	return git_env_bool("GIT_TEST_PROVENANCE", 1);
 }
 
 static int read_record(struct repository *r, const char *ref,

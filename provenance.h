@@ -2,10 +2,10 @@
 #define PROVENANCE_H
 
 #include "hash.h"
+#include "strbuf.h"
 
 struct commit;
 struct repository;
-struct strbuf;
 
 /*
  * Provenance records describe who wrote the lines of a commit (line
@@ -80,6 +80,27 @@ struct provenance_record {
 
 #define PROVENANCE_RECORD_INIT { 0 }
 
+/* An AI session named by a reasoning record. */
+struct provenance_session {
+	char *id;
+	char *model;
+	char *tool;
+	/* Unix time of the session's first and last stamp, or 0 if unknown */
+	timestamp_t started;
+	timestamp_t ended;
+};
+
+/* A reasoning record. */
+struct provenance_reasoning {
+	int version;
+	struct object_id commit;
+	struct provenance_session *sessions;
+	size_t sessions_nr, sessions_alloc;
+	struct strbuf summary;
+};
+
+#define PROVENANCE_REASONING_INIT { .version = 1, .summary = STRBUF_INIT }
+
 /*
  * Parse the line record in `buf` into `rec`, which must have been
  * initialized with PROVENANCE_RECORD_INIT.  Object ids are parsed
@@ -100,6 +121,20 @@ void provenance_record_format(const struct provenance_record *rec,
 			      struct strbuf *out);
 
 void provenance_record_release(struct provenance_record *rec);
+
+/* Append the serialized form of the reasoning record `rec` to `out`. */
+void provenance_reasoning_format(const struct provenance_reasoning *rec,
+				 struct strbuf *out);
+
+void provenance_reasoning_release(struct provenance_reasoning *rec);
+
+/*
+ * Return 1 if commits made in `r` record provenance.  The
+ * configuration variable "provenance.enabled" decides; if it is not
+ * set, the environment variable GIT_TEST_PROVENANCE does, and
+ * provenance is enabled if neither is set.
+ */
+int provenance_enabled(struct repository *r);
 
 /*
  * Read the line record (or reasoning record) attached to `commit` in

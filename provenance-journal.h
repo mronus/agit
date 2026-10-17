@@ -78,6 +78,14 @@ int provenance_journal_append(struct repository *r,
 			      const struct provenance_journal_entry *e);
 
 /*
+ * Remove the journal of the current worktree of `r`, holding the
+ * journal's lock while doing so.  A missing journal is not an error.
+ * Returns 0 on success, or -1 with errno set, without reporting the
+ * error.
+ */
+int provenance_journal_clear(struct repository *r);
+
+/*
  * Read the journal of the current worktree of `r` into `j`, which
  * must have been initialized with PROVENANCE_JOURNAL_INIT.  A missing
  * journal is empty.  Malformed lines are skipped with a warning.
