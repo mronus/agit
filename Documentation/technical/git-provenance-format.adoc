@@ -174,6 +174,38 @@ allow a later version of the extension to find the same content in a
 rewritten commit and re-attach the record to it.
 
 
+Records written by `git commit`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The rules above are what readers may rely on.  `git commit` also
+follows these conventions when it writes a line record:
+
+- The human who makes the commit is the actor `human`, with the
+  author of the commit, without the date, as `<ident>`.
+
+- An AI actor is named after its session id, unless that id is
+  `human` or `-`, in which case it is prefixed with `@`.  `<model>`
+  and `<tool>` come from the first `begin` stamp of the session that
+  gives them, and are `unknown` if none does.  `<source>` is `observed`
+  if the journal has `end` or `edit` stamps for the session, and
+  `declared` otherwise (see `claim` and `git commit --session`).
+
+- `capture` is `declared` if the record names AI actors but the
+  journal had no `end` or `edit` stamp, and `observed` otherwise.
+
+- Only actors used by a range are declared, in the order of their first
+  use; the ids of a range are listed in that order too.
+
+- Files are listed in the order of their paths.  Within a file, the
+  `+` ranges come first, then the `-` ranges, each in ascending order.
+  Each range is a maximal run of lines with the same actors.
+
+- Files that are not regular files in the commit or its first parent
+  (symbolic links, submodules) and files that either side has as
+  binary are left out.  A commit that changes nothing, as made with
+  `--allow-empty`, gets a record without `file` blocks.
+
+
 Reasoning record, version 1
 ---------------------------
 
@@ -193,6 +225,15 @@ in the change.  A record with no `session` line states that no AI was
 involved.  The first blank line ends the header; everything after it is
 a free-form summary in UTF-8, meant to be read by humans, and is not
 subject to the "ignored lines" rule above.
+
+`git commit` writes a reasoning record only when at least one session
+is attached to the commit: the sessions that own a line added by the
+commit, in the order in which the line record first uses them,
+followed by the session given with `--session` if it is not among them.
+`started` and `ended` are the times of the session's first `begin` and
+last `end` stamps.  The summary is the most recent `reason` summary of
+each of these sessions, in the same order, separated by blank lines.
+Transcripts are not stored by version 1.
 
 The design calls for a reasoning record to be a tree, holding the
 summary together with per-session metadata and optional transcripts,
@@ -292,3 +333,12 @@ are ordinary objects, but nothing refers to them, so `git gc` may
 prune them; a reader must treat entries whose objects are missing as
 having no content.  A reader ignores lines that do not parse, with a
 warning.
+
+`git commit` consumes the journal: after it has recorded the
+provenance of a commit, it removes the journal while holding the lock.
+A partial commit, made with a pathspec, `--only` or `--include`, keeps
+the journal, as its stamps may be needed for the paths left out.  Any
+other commit consumes all the stamps, including those for changes it
+does not include, such as changes left unstaged by `git add -p`; lines
+from those changes are `HUMAN` when they are committed later.  The
+commit skips entries whose objects are missing with a warning.

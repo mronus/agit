@@ -164,6 +164,34 @@ out:
 	return ret;
 }
 
+int provenance_journal_clear(struct repository *r)
+{
+	struct lock_file lk = LOCK_INIT;
+	char *path = repo_git_path(r, "provenance/journal");
+	int ret = 0;
+
+	if (!file_exists(path))
+		goto out;
+	if (repo_hold_lock_file_for_update_timeout(r, &lk, path, 0,
+						   JOURNAL_LOCK_TIMEOUT_MS) < 0) {
+		ret = -1;
+		goto out;
+	}
+	if (unlink(path) && errno != ENOENT) {
+		int saved_errno = errno;
+
+		ret = -1;
+		rollback_lock_file(&lk);
+		errno = saved_errno;
+		goto out;
+	}
+	rollback_lock_file(&lk);
+
+out:
+	free(path);
+	return ret;
+}
+
 /*
  * Parse an object id that is followed by a space or by the end of the
  * line, and advance *p past it.

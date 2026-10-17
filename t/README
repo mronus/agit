@@ -452,6 +452,13 @@ GIT_TEST_DEFAULT_REF_STORAGE_FORMAT=<format> specifies which ref storage format
 to use in the test scripts. Recognized values for <format> are "files" and
 "reftable".
 
+GIT_TEST_PROVENANCE=<boolean> decides whether commits record
+provenance when the 'provenance.enabled' configuration variable is not
+set.  Provenance is on by default, but the test suite sets this to
+false, as tests written for stock Git do not expect refs/provenance/*
+to appear.  Run the suite with GIT_TEST_PROVENANCE=true to test with
+the default.
+
 GIT_TEST_NO_WRITE_REV_INDEX=<boolean>, when true disables the
 'pack.writeReverseIndex' setting.
 

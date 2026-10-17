@@ -164,6 +164,12 @@ else
 fi
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
+# The provenance extension is on by default.  Tests written for stock
+# Git do not expect refs/provenance/* to appear, so turn it off for the
+# test suite unless the caller asks for it.
+: ${GIT_TEST_PROVENANCE:=false}
+export GIT_TEST_PROVENANCE
+
 
 ################################################################
 # It appears that people try to run tests without building...

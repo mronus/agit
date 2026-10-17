@@ -15,7 +15,7 @@ git commit [-a | --interactive | --patch] [-s] [-v] [-u[<mode>]] [--amend]
 	   [--date=<date>] [--cleanup=<mode>] [--[no-]status]
 	   [-i | -o] [--pathspec-from-file=<file> [--pathspec-file-nul]]
 	   [(--trailer <token>[(=|:)<value>])...] [-S[<keyid>]]
-	   [--] [<pathspec>...]
+	   [--session <id>] [--] [<pathspec>...]
 
 DESCRIPTION
 -----------
@@ -214,6 +214,13 @@ include::signoff-option.adoc[]
 	(linkgit:git-interpret-trailers[1]) can be used to define if
 	a duplicated trailer is omitted, where in the run of trailers
 	each trailer would appear, and other details.
+
+`--session <id>`::
+	The id of the AI agent session that made the change.  Its
+	stamps in the capture journal (see linkgit:git-stamp[1]) and its
+	reasoning are attached to the commit as provenance.  If the
+	journal has no stamps for the session, its changes are recorded
+	as declared by it.  See `provenance.*` in linkgit:git-config[1].
 
 `-n`::
 `--verify`::

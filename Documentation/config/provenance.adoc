@@ -1,0 +1,15 @@
+provenance.enabled::
+	If true, linkgit:git-commit[1] records provenance for each
+	commit it makes: which lines were written by an AI agent, by a
+	human, or by both, attributed from the stamps that agents make
+	with linkgit:git-stamp[1], and the reasoning of the agent
+	sessions involved.  The records are stored under
+	`refs/provenance/lines` and `refs/provenance/reasoning`.  If
+	false, `git commit` neither records provenance nor reads the
+	journal of stamps.  Defaults to true.
+
+provenance.require::
+	If true, linkgit:git-commit[1] refuses to make a commit that no
+	AI agent session is linked to: a commit made without `--session`
+	in which no line is attributed to a session.  Has no effect if
+	`provenance.enabled` is false.  Defaults to false.

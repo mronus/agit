@@ -33,6 +33,8 @@ anchor () {
 }
 
 test_expect_success 'setup' '
+	# records are attached by hand below, not by "git commit"
+	git config provenance.enabled false &&
 	test_write_lines one two three >file &&
 	git add file &&
 	test_tick &&

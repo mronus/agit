@@ -42,6 +42,14 @@
 #include "commit-reach.h"
 #include "commit-graph.h"
 #include "pretty.h"
+#include "provenance.h"
+#include "provenance-attribute.h"
+#include "provenance-journal.h"
+#include "notes.h"
+#include "notes-utils.h"
+#include "hex.h"
+#include "odb.h"
+#include "refs.h"
 #include "trailer.h"
 
 static const char * const builtin_commit_usage[] = {
@@ -52,7 +60,7 @@ static const char * const builtin_commit_usage[] = {
 	   "           [--date=<date>] [--cleanup=<mode>] [--[no-]status]\n"
 	   "           [-i | -o] [--pathspec-from-file=<file> [--pathspec-file-nul]]\n"
 	   "           [(--trailer <token>[(=|:)<value>])...] [-S[<keyid>]]\n"
-	   "           [--] [<pathspec>...]"),
+	   "           [--session <id>] [--] [<pathspec>...]"),
 	NULL
 };
 
@@ -130,6 +138,7 @@ static int config_commit_verbose = -1; /* unspecified */
 static int no_post_rewrite, allow_empty_message, pathspec_file_nul;
 static const char *untracked_files_arg, *force_date, *ignore_submodule_arg, *ignored_arg;
 static const char *sign_commit, *pathspec_from_file;
+static const char *provenance_session;
 static struct strvec trailer_args = STRVEC_INIT;
 
 /*
@@ -1695,6 +1704,120 @@ static int git_commit_config(const char *k, const char *v,
 	return git_status_config(k, v, ctx, s);
 }
 
+/*
+ * Attribute the lines of the commit about to be made, with its first
+ * parent among `parents`.  Dies if provenance.require is set and no
+ * session is linked to the commit.
+ */
+static void compute_provenance(struct commit_list *parents,
+			       const char *author_ident,
+			       struct provenance_record *lines,
+			       struct provenance_reasoning *reasoning)
+{
+	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
+	struct ident_split ident;
+	char *human;
+	int require = 0;
+
+	if (split_ident_line(&ident, author_ident, strlen(author_ident))) {
+		rollback_index_files();
+		die(_("malformed author ident '%s'"), author_ident);
+	}
+	human = xstrfmt("%.*s <%.*s>",
+			(int)(ident.name_end - ident.name_begin), ident.name_begin,
+			(int)(ident.mail_end - ident.mail_begin), ident.mail_begin);
+
+	if (provenance_journal_read(the_repository, &journal) ||
+	    provenance_attribute(the_repository, parents ? parents->item : NULL,
+				 &the_repository->index->cache_tree->oid,
+				 &journal, provenance_session, human,
+				 lines, reasoning)) {
+		rollback_index_files();
+		die(_("unable to record provenance"));
+	}
+	provenance_journal_release(&journal);
+	free(human);
+
+	if (!reasoning->sessions_nr &&
+	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
+	    require) {
+		rollback_index_files();
+		die(_("no session is linked to this commit and provenance.require is set"));
+	}
+}
+
+/*
+ * Write `record` as the note for `commit` under the notes ref `ref`,
+ * and queue the update of `ref` into `transaction`.
+ */
+static int queue_provenance_note(struct ref_transaction *transaction,
+				 const char *ref,
+				 const struct object_id *commit,
+				 const struct strbuf *record,
+				 const char *reflog_msg,
+				 struct strbuf *err)
+{
+	struct notes_tree t = { 0 };
+	struct object_id old_oid, blob_oid, notes_oid;
+	struct strbuf msg = STRBUF_INIT;
+	int ret;
+
+	if (refs_read_ref(get_main_ref_store(the_repository), ref, &old_oid))
+		oidcpy(&old_oid, null_oid(the_hash_algo));
+	if (odb_write_object(the_repository->objects, record->buf, record->len,
+			     OBJ_BLOB, &blob_oid)) {
+		strbuf_addf(err, _("unable to write the record for '%s'"), ref);
+		return -1;
+	}
+
+	/*
+	 * init_notes() also makes `ref` the notes namespace for ref
+	 * decorations, which "git commit" never loads.
+	 */
+	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
+	add_note(&t, commit, &blob_oid, NULL);
+	strbuf_addf(&msg, "Provenance for %s\n", oid_to_hex(commit));
+	create_notes_commit(the_repository, &t, NULL, msg.buf, msg.len,
+			    &notes_oid);
+	free_notes(&t);
+
+	ret = ref_transaction_update(transaction, ref, &notes_oid, &old_oid,
+				     NULL, NULL, 0, reflog_msg, err);
+	strbuf_release(&msg);
+	return ret;
+}
+
+static int queue_provenance(struct ref_transaction *transaction,
+			    const struct object_id *oid,
+			    struct provenance_record *lines,
+			    struct provenance_reasoning *reasoning,
+			    const char *reflog_msg,
+			    struct strbuf *err)
+{
+	struct strbuf buf = STRBUF_INIT, msg = STRBUF_INIT;
+	int ret;
+
+	strbuf_addf(&msg, "%s: provenance for %s", reflog_msg,
+		    repo_find_unique_abbrev(the_repository, oid, DEFAULT_ABBREV));
+
+	oidcpy(&lines->commit, oid);
+	provenance_record_format(lines, &buf);
+	ret = queue_provenance_note(transaction, PROVENANCE_LINES_REF, oid,
+				    &buf, msg.buf, err);
+
+	if (!ret && reasoning->sessions_nr) {
+		strbuf_reset(&buf);
+		oidcpy(&reasoning->commit, oid);
+		provenance_reasoning_format(reasoning, &buf);
+		ret = queue_provenance_note(transaction, PROVENANCE_REASONING_REF,
+					    oid, &buf, msg.buf, err);
+	}
+
+	strbuf_release(&buf);
+	strbuf_release(&msg);
+	return ret;
+}
+
 int cmd_commit(int argc,
 	       const char **argv,
 	       const char *prefix,
@@ -1737,6 +1860,8 @@ int cmd_commit(int argc,
 			.flags = PARSE_OPT_OPTARG,
 			.defval = (intptr_t) "",
 		},
+		OPT_STRING(0, "session", &provenance_session, N_("id"),
+			   N_("the AI agent session that made the change")),
 		/* end commit message options */
 
 		OPT_GROUP(N_("Commit contents options")),
@@ -1794,6 +1919,10 @@ int cmd_commit(int argc,
 	struct commit *current_head = NULL;
 	struct commit_extra_header *extra = NULL;
 	struct strbuf err = STRBUF_INIT;
+	struct ref_transaction *transaction;
+	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
+	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	int record_provenance;
 	int ret = 0;
 
 	show_usage_with_options_if_asked(argc, argv,
@@ -1827,6 +1956,9 @@ int cmd_commit(int argc,
 	if (verbose == -1)
 		verbose = (config_commit_verbose < 0) ? 0 : config_commit_verbose;
 
+	if (provenance_session && !provenance_session_is_valid(provenance_session))
+		die(_("invalid session id '%s'"), provenance_session);
+
 	if (cleanup_arg) {
 		free(cleanup_config);
 		cleanup_config = xstrdup(cleanup_arg);
@@ -1835,6 +1967,7 @@ int cmd_commit(int argc,
 
 	if (dry_run)
 		return dry_run_commit(argv, prefix, current_head, &s);
+	record_provenance = provenance_enabled(the_repository);
 	index_file = prepare_index(argv, prefix, current_head, 0);
 
 	/* Set up everything for writing the commit object.  This includes
@@ -1927,6 +2060,10 @@ int cmd_commit(int argc,
 		strbuf_release(&body);
 	}
 
+	if (record_provenance)
+		compute_provenance(parents, author_ident.buf,
+				   &prov_lines, &prov_reasoning);
+
 	if (amend) {
 		const char *exclude_gpgsig[3] = { "gpgsig", "gpgsig-sha256", NULL };
 		extra = read_commit_extra_headers(current_head, exclude_gpgsig);
@@ -1942,11 +2079,28 @@ int cmd_commit(int argc,
 		die(_("failed to write commit object"));
 	}
 
-	if (update_head_with_reflog(current_head, &oid, reflog_msg, &sb,
-				    &err)) {
+	/* Move HEAD and the provenance refs together, or not at all. */
+	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
+						  0, &err);
+	if (!transaction ||
+	    queue_head_update_with_reflog(transaction, current_head, &oid,
+					  reflog_msg, &sb, &err) ||
+	    (record_provenance &&
+	     queue_provenance(transaction, &oid, &prov_lines, &prov_reasoning,
+			      reflog_msg, &err)) ||
+	    ref_transaction_commit(transaction, &err)) {
 		rollback_index_files();
 		die("%s", err.buf);
 	}
+	ref_transaction_free(transaction);
+
+	/*
+	 * The commit has consumed the journal, unless it was partial:
+	 * the stamps may then be needed for the paths left out.
+	 */
+	if (record_provenance && !argc && !pathspec_from_file && !only &&
+	    !also && provenance_journal_clear(the_repository))
+		warning_errno(_("unable to clear the provenance journal"));
 
 	sequencer_post_commit_cleanup(the_repository, 0);
 	unlink(git_path_merge_head(the_repository));
@@ -1979,10 +2133,17 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
+	if (record_provenance && !prov_reasoning.sessions_nr)
+		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
+				  _("no session is linked to this commit; if the change came from an\n"
+				    "LLM session, provide its details with --session"));
+
 	apply_autostash_ref(the_repository, "MERGE_AUTOSTASH",
 			    NULL, NULL, NULL, NULL);
 
 cleanup:
+	provenance_record_release(&prov_lines);
+	provenance_reasoning_release(&prov_reasoning);
 	free_commit_extra_headers(extra);
 	commit_list_free(parents);
 	strbuf_release(&author_ident);

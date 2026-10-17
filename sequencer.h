@@ -8,6 +8,7 @@
 
 struct commit;
 struct index_state;
+struct ref_transaction;
 struct repository;
 
 const char *git_path_commit_editmsg(void);
@@ -251,6 +252,17 @@ int message_is_empty(const struct strbuf *sb,
 		     enum commit_msg_cleanup_mode cleanup_mode);
 int template_untouched(const struct strbuf *sb, const char *template_file,
 		       enum commit_msg_cleanup_mode cleanup_mode);
+/*
+ * Queue the update of HEAD to `new_head` (from `old_head`, or from
+ * nothing if it is NULL) into `transaction`, with a reflog message made
+ * of `action` and the first line of `msg`.  Returns 0 on success, or
+ * -1 with an error message in `err`.
+ */
+int queue_head_update_with_reflog(struct ref_transaction *transaction,
+				  const struct commit *old_head,
+				  const struct object_id *new_head,
+				  const char *action, const struct strbuf *msg,
+				  struct strbuf *err);
 int update_head_with_reflog(const struct commit *old_head,
 			    const struct object_id *new_head,
 			    const char *action, const struct strbuf *msg,
