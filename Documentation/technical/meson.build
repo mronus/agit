@@ -14,6 +14,7 @@ articles = [
   'directory-rename-detection.adoc',
   'git-architecture.adoc',
   'git-provenance.adoc',
+  'git-provenance-format.adoc',
   'hash-function-transition.adoc',
   'large-object-promisors.adoc',
   'long-running-process-protocol.adoc',
