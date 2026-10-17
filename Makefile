@@ -1262,6 +1262,7 @@ LIB_OBJS += promisor-remote.o
 LIB_OBJS += prompt.o
 LIB_OBJS += protocol.o
 LIB_OBJS += protocol-caps.o
+LIB_OBJS += provenance.o
 LIB_OBJS += prune-packed.o
 LIB_OBJS += pseudo-merge.o
 LIB_OBJS += quote.o

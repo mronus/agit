@@ -471,6 +471,7 @@ libgit_sources = [
   'prompt.c',
   'protocol.c',
   'protocol-caps.c',
+  'provenance.c',
   'prune-packed.c',
   'pseudo-merge.c',
   'quote.c',
