@@ -1286,15 +1286,15 @@ int template_untouched(const struct strbuf *sb, const char *template_file,
 	return rest_is_empty(sb, start - sb->buf);
 }
 
-int update_head_with_reflog(const struct commit *old_head,
-			    const struct object_id *new_head,
-			    const char *action, const struct strbuf *msg,
-			    struct strbuf *err)
+int queue_head_update_with_reflog(struct ref_transaction *transaction,
+				  const struct commit *old_head,
+				  const struct object_id *new_head,
+				  const char *action, const struct strbuf *msg,
+				  struct strbuf *err)
 {
-	struct ref_transaction *transaction;
 	struct strbuf sb = STRBUF_INIT;
 	const char *nl;
-	int ret = 0;
+	int ret;
 
 	if (action) {
 		strbuf_addstr(&sb, action);
@@ -1309,17 +1309,31 @@ int update_head_with_reflog(const struct commit *old_head,
 		strbuf_addch(&sb, '\n');
 	}
 
+	ret = ref_transaction_update(transaction, "HEAD", new_head,
+				     old_head ? &old_head->object.oid : null_oid(the_hash_algo),
+				     NULL, NULL, 0, sb.buf, err) ? -1 : 0;
+	strbuf_release(&sb);
+
+	return ret;
+}
+
+int update_head_with_reflog(const struct commit *old_head,
+			    const struct object_id *new_head,
+			    const char *action, const struct strbuf *msg,
+			    struct strbuf *err)
+{
+	struct ref_transaction *transaction;
+	int ret = 0;
+
 	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
 						  0, err);
 	if (!transaction ||
-	    ref_transaction_update(transaction, "HEAD", new_head,
-				   old_head ? &old_head->object.oid : null_oid(the_hash_algo),
-				   NULL, NULL, 0, sb.buf, err) ||
+	    queue_head_update_with_reflog(transaction, old_head, new_head,
+					  action, msg, err) ||
 	    ref_transaction_commit(transaction, err)) {
 		ret = -1;
 	}
 	ref_transaction_free(transaction);
-	strbuf_release(&sb);
 
 	return ret;
 }
