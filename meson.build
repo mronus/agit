@@ -681,6 +681,7 @@ builtin_sources = [
   'builtin/pack-objects.c',
   'builtin/pack-refs.c',
   'builtin/patch-id.c',
+  'builtin/provenance.c',
   'builtin/prune-packed.c',
   'builtin/prune.c',
   'builtin/pull.c',
