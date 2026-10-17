@@ -258,6 +258,7 @@ int cmd_show(int argc, const char **argv, const char *prefix, struct repository 
 int cmd_show_branch(int argc, const char **argv, const char *prefix, struct repository *repo);
 int cmd_show_index(int argc, const char **argv, const char *prefix, struct repository *repo);
 int cmd_sparse_checkout(int argc, const char **argv, const char *prefix, struct repository *repo);
+int cmd_stamp(int argc, const char **argv, const char *prefix, struct repository *repo);
 int cmd_status(int argc, const char **argv, const char *prefix, struct repository *repo);
 int cmd_stash(int argc, const char **argv, const char *prefix, struct repository *repo);
 int cmd_stripspace(int argc, const char **argv, const char *prefix, struct repository *repo);

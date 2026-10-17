@@ -1,0 +1,120 @@
+git-stamp(1)
+============
+
+NAME
+----
+git-stamp - Record the edits of an AI agent for provenance
+
+
+SYNOPSIS
+--------
+[synopsis]
+git stamp begin --session <id> [--model <model>] [--tool <tool>] [--] [<pathspec>...]
+git stamp end --session <id> [--] [<pathspec>...]
+git stamp edit --session <id> --path <path> --pre <file> [--post <file>]
+git stamp reason --session <id> --summary <file> [--transcript <file>]
+git stamp claim --session <id> (--patch <file> | [--] <path>...)
+git stamp list [--session <id>]
+
+DESCRIPTION
+-----------
+
+Record in the capture journal of the current worktree what an AI agent
+changes in the working tree, so that the lines it wrote can later be
+told apart from the lines written by humans.  The command is meant to
+be called by the tool that runs the agent, for instance from hooks
+that run immediately before and after the agent writes to files.
+Humans do not call it.
+
+Each stamp names the agent session it belongs to.  A session id is a
+non-empty string of the characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`
+and `-`; parallel agents use distinct session ids.
+
+`begin` and `end` take a snapshot of the working tree: the tree that
+`git add -A` would stage, written to the object database without
+changing the index.  Files that have not changed since they were last
+staged cost nothing, as their content is already known.
+
+The journal is kept in the git directory of the worktree, is never
+transferred, and is not used by any other command yet.  See the
+"Capture journal" section of
+`Documentation/technical/git-provenance-format.adoc` for its format.
+
+COMMANDS
+--------
+
+`begin --session <id> [--model <model>] [--tool <tool>] [--] [<pathspec>...]`::
+	Record that the session is about to change files, with a
+	snapshot of the working tree.  With _<pathspec>_, only the
+	matching paths are taken from the working tree; the snapshot has
+	the content of the index for all other paths.
+
+`end --session <id> [--] [<pathspec>...]`::
+	Record that the session has finished changing files, with a
+	snapshot of the working tree taken as for `begin`.  The changes
+	between the preceding snapshot and this one are attributed to the
+	session.
+
+`edit --session <id> --path <path> --pre <file> [--post <file>]`::
+	Record that the session changed _<path>_ from the content of the
+	`--pre` file to that of the `--post` file, for tools that report
+	an edit after it was made.  Without `--post`, the content of
+	_<path>_ in the working tree is used.  Use an empty file for
+	`--pre` if the edit created _<path>_.  The contents are stored as
+	`git add` would store _<path>_, applying its attributes and
+	filters.
+
+`reason --session <id> --summary <file> [--transcript <file>]`::
+	Record the summary of the work of the session, and optionally its
+	transcript.  If _<file>_ is `-` for `--summary`, the summary is
+	read from the standard input.
+
+`claim --session <id> (--patch <file> | [--] <path>...)`::
+	Declare that the session wrote the changes to the given paths, or
+	the changes in the given patch, for agents that could not stamp
+	their edits while making them.
+
+`list [--session <id>]`::
+	Print the entries of the journal, one per line, in the order in
+	which they were recorded.  With `--session`, print only the
+	entries of that session.
+
+OPTIONS
+-------
+
+`--session <id>`::
+	The agent session that made the change.  Required by every
+	command except `list`.
+
+`--model <model>`::
+`--tool <tool>`::
+	The model of the agent and the tool that runs it, recorded with
+	`begin`.  They must not contain spaces.
+
+`--path <path>`::
+	The path of the file that `edit` records.
+
+`--pre <file>`::
+`--post <file>`::
+	Files holding the content of `--path` before and after the edit.
+
+`--summary <file>`::
+`--transcript <file>`::
+	Files holding the summary and the transcript that `reason`
+	records.
+
+`--patch <file>`::
+	A file holding the patch that `claim` records.
+
+EXIT STATUS
+-----------
+
+0 if the entry was recorded (or, for `list`, the journal was read),
+and 1 if the journal could not be read or written.  A missing required
+option, such as `--session`, exits with status 129.  Other errors,
+such as an invalid session id, a file that cannot be read or a path
+containing a newline, exit with status 128.
+
+GIT
+---
+Part of the linkgit:git[1] suite

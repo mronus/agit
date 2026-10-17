@@ -189,6 +189,7 @@ git-show-index                          plumbinginterrogators
 git-show-ref                            plumbinginterrogators
 git-sparse-checkout                     mainporcelain
 git-stage                                                               complete
+git-stamp                               plumbingmanipulators
 git-stash                               mainporcelain
 git-status                              mainporcelain           info
 git-stripspace                          purehelpers

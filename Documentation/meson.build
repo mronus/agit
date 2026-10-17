@@ -142,6 +142,7 @@ manpages = {
   'git-sh-setup.adoc' : 1,
   'git-sparse-checkout.adoc' : 1,
   'git-stage.adoc' : 1,
+  'git-stamp.adoc' : 1,
   'git-stash.adoc' : 1,
   'git-status.adoc' : 1,
   'git-stripspace.adoc' : 1,

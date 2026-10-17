@@ -257,7 +257,7 @@ Agents talk to git through one command, `git stamp`. Only the agent
 side ever calls it; the human calls nothing, and human edits are
 inferred by elimination.
 
-`git stamp begin --session <id> --model <m> --tool <t> [<paths>]`::
+`git stamp begin --session <id> [--model <m>] [--tool <t>] [<paths>]`::
 	Called by the agent's harness (a hook) immediately before the
 	agent writes to files. Snapshots the current content of
 	`<paths>`, or of the whole working tree if none are given, into
@@ -268,11 +268,16 @@ inferred by elimination.
 	again; the difference between the two snapshots is an AI interval
 	owned by the session.
 
-`git stamp edit --session <id> --path <path>`::
-	Called by a harness that reports the edit itself (old and new
-	text) rather than a before/after pair. Applies the reported edit
-	to the last known content of the path and records those lines as
-	an AI interval. Observed-quality, like `begin`/`end`.
+`git stamp edit --session <id> --path <path> --pre <file> [--post <file>]`::
+	Called by a harness that reports an edit after making it, rather
+	than calling `begin` and `end` around it. `--pre` holds the
+	content of the path before the edit and `--post` the content
+	after it, defaulting to the file in the working tree; the
+	difference is an AI interval. Git has no parser for the edit
+	descriptions that harnesses exchange, so a harness whose payload
+	carries only the old and new text reconstructs the pre-image by
+	undoing the edit on the file on disk. Observed-quality, like
+	`begin`/`end`.
 
 `git stamp reason --session <id> --summary <file> [--transcript <file>]`::
 	Called by the agent when it finishes a task. Stores the reasoning
