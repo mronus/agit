@@ -2011,6 +2011,16 @@ foreach symlink : [
   )
 endforeach
 
+bin_wrappers += executable('agit',
+  objects: git_builtin.extract_all_objects(recursive: false),
+  dependencies: [libgit_commonmain],
+)
+
+install_symlink('agit',
+  install_dir: get_option('bindir'),
+  pointing_to: 'git',
+)
+
 scripts_sh = [
   'git-difftool--helper.sh',
   'git-filter-branch.sh',
