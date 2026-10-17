@@ -712,6 +712,7 @@ builtin_sources = [
   'builtin/show-index.c',
   'builtin/show-ref.c',
   'builtin/sparse-checkout.c',
+  'builtin/stamp.c',
   'builtin/stash.c',
   'builtin/stripspace.c',
   'builtin/submodule--helper.c',

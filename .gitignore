@@ -167,6 +167,7 @@
 /git-show-ref
 /git-sparse-checkout
 /git-stage
+/git-stamp
 /git-stash
 /git-status
 /git-stripspace
