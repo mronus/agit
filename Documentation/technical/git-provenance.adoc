@@ -373,6 +373,9 @@ once the message is final and the hooks have run. Once the commit
 object is written, it stores the records and updates
 `refs/provenance/lines` and `refs/provenance/reasoning` in the same
 ref transaction as the branch, so either all refs move or none do.
+The notes commits that carry the records are authored and committed
+by the committer ident of the commit, not by the environment's
+author, which a rebase may leave unset or unparsable.
 The journal is then emptied, except after a partial commit.
 `provenance.enabled` (on by default) turns all of this off.
 
