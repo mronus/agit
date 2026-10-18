@@ -19,6 +19,7 @@
 #include "diff-merges.h"
 #include "diffcore.h"
 #include "preload-index.h"
+#include "provenance-view.h"
 #include "read-cache-ll.h"
 #include "revision.h"
 #include "log-tree.h"
@@ -137,7 +138,8 @@ static void builtin_diff_blobs(struct rev_info *revs,
 }
 
 static void builtin_diff_index(struct rev_info *revs,
-			       int argc, const char **argv)
+			       int argc, const char **argv,
+			       const struct object_id *tree)
 {
 	unsigned int option = 0;
 	while (1 < argc) {
@@ -167,13 +169,20 @@ static void builtin_diff_index(struct rev_info *revs,
 	} else if (repo_read_index(the_repository) < 0) {
 		die_errno("repo_read_cache");
 	}
+	if (!(option & DIFF_INDEX_MERGE_BASE))
+		provenance_diff_set_live(&revs->diffopt,
+					 (option & DIFF_INDEX_CACHED) ?
+					 PROVENANCE_DIFF_INDEX :
+					 PROVENANCE_DIFF_WORKTREE, tree);
 	run_diff_index(revs, option);
 }
 
 static void builtin_diff_tree(struct rev_info *revs,
 			      int argc, const char **argv,
 			      struct object_array_entry *ent0,
-			      struct object_array_entry *ent1)
+			      struct object_array_entry *ent1,
+			      struct commit *commit0,
+			      struct commit *commit1)
 {
 	const struct object_id *(oid[2]);
 	struct object_id mb_oid;
@@ -203,6 +212,12 @@ static void builtin_diff_tree(struct rev_info *revs,
 			swap = 1;
 		oid[swap] = &ent0->item->oid;
 		oid[1 - swap] = &ent1->item->oid;
+
+		/* a commit against its first parent shows its own record */
+		if (swap ? commit0 : commit1)
+			provenance_diff_set_commit(&revs->diffopt,
+						   swap ? commit0 : commit1,
+						   oid[0]);
 	}
 	diff_tree_oid(oid[0], oid[1], "", &revs->diffopt);
 	log_tree_diff_flush(revs);
@@ -286,6 +301,7 @@ static void builtin_diff_files(struct rev_info *revs, int argc, const char **arg
 				    0) < 0) {
 		die_errno("repo_read_index_preload");
 	}
+	provenance_diff_set_live(&revs->diffopt, PROVENANCE_DIFF_FILES, NULL);
 	run_diff_files(revs, options);
 }
 
@@ -404,6 +420,9 @@ int cmd_diff(int argc,
 	int i;
 	struct rev_info rev;
 	struct object_array ent = OBJECT_ARRAY_INIT;
+	/* the commit each tree in "ent" was given as, or NULL */
+	struct commit **ent_commit = NULL;
+	size_t ent_commit_alloc = 0;
 	int first_non_parent = -1;
 	int blobs = 0, paths = 0;
 	struct object_array_entry *blob[2];
@@ -574,14 +593,17 @@ int cmd_diff(int argc,
 		struct object *obj = entry->item;
 		const char *name = entry->name;
 		int flags = (obj->flags & UNINTERESTING);
+		struct commit *commit = NULL;
 		if (!obj->parsed)
 			obj = parse_object(the_repository, &obj->oid);
 		obj = deref_tag(the_repository, obj, NULL, 0);
 		if (!obj)
 			die(_("invalid object '%s' given."), name);
 		if (obj->type == OBJ_COMMIT) {
-			struct tree *tree = repo_get_commit_tree(
-				the_repository, (struct commit *)obj);
+			struct tree *tree;
+
+			commit = (struct commit *)obj;
+			tree = repo_get_commit_tree(the_repository, commit);
 			if (!tree)
 				die(_("unable to read tree object for commit '%s'"), name);
 			obj = &tree->object;
@@ -591,6 +613,8 @@ int cmd_diff(int argc,
 			if (sdiff.skip && bitmap_get(sdiff.skip, i))
 				continue;
 			obj->flags |= flags;
+			ALLOC_GROW(ent_commit, ent.nr + 1, ent_commit_alloc);
+			ent_commit[ent.nr] = commit;
 			add_object_array(obj, name, &ent);
 			if (first_non_parent < 0 &&
 			    (i >= rev.cmdline.nr || /* HEAD by hand. */
@@ -634,13 +658,14 @@ int cmd_diff(int argc,
 	else if (blobs)
 		usage(builtin_diff_usage);
 	else if (ent.nr == 1)
-		builtin_diff_index(&rev, argc, argv);
+		builtin_diff_index(&rev, argc, argv, &ent.objects[0].item->oid);
 	else if (ent.nr == 2) {
 		if (sdiff.warn)
 			warning(_("%s...%s: multiple merge bases, using %s"),
 				sdiff.left, sdiff.right, sdiff.base);
 		builtin_diff_tree(&rev, argc, argv,
-				  &ent.objects[0], &ent.objects[1]);
+				  &ent.objects[0], &ent.objects[1],
+				  ent_commit[0], ent_commit[1]);
 	} else
 		builtin_diff_combined(&rev, argc, argv,
 				      ent.objects, ent.nr,
@@ -650,6 +675,7 @@ int cmd_diff(int argc,
 		refresh_index_quietly();
 	release_revisions(&rev);
 	object_array_clear(&ent);
+	free(ent_commit);
 	symdiff_release(&sdiff);
 	return result;
 }

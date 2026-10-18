@@ -146,6 +146,32 @@ endif::git-format-patch[]
 	' ' respectively.
 
 ifndef::git-format-patch[]
+`--provenance`::
+	Show who wrote each line of the patch, in a column inserted
+	before the `+`, `-` or ' ' that starts the line: `A` for a line
+	written by an AI agent, `M` for one that an agent and a human
+	both edited, `H` for one written by a human, and `?` when its
+	provenance is not known.  Context lines get a space.  See
+	linkgit:git-provenance[1].
++
+The marks of a commit shown against its first parent, as
+`git show`, `git log -p` and `git diff <commit>^ <commit>` show it,
+come from the line record of the commit.  The marks of changes that
+are not committed yet come from the capture journal, attributed as
+`git commit` attributes them: `git diff --cached` shows the marks
+that `git commit` would record now, and `git diff HEAD` those that
+`git commit -a` would record.  `git diff` marks the added lines as
+`git commit -a` would, and shows the removed lines, which are lines
+of the index, as `?`.  Every other line, including all the lines of a
+diff between two arbitrary commits and lines shown through a
+`textconv` filter, is shown as `?`.
++
+The column is not added to combined diffs or in `--word-diff` mode.
+A patch with the column cannot be applied with linkgit:git-apply[1]:
+`--provenance` is meant for reading.
+endif::git-format-patch[]
+
+ifndef::git-format-patch[]
 `--raw`::
 ifndef::git-log[]
 	Generate the diff in raw format.

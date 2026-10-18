@@ -1932,6 +1932,7 @@ __git_diff_common_options="--stat --numstat --shortstat --summary
 			--quiet --ext-diff --no-ext-diff --unified=
 			--no-prefix --src-prefix= --dst-prefix=
 			--inter-hunk-context= --function-context
+			--provenance
 			--patience --histogram --minimal
 			--raw --word-diff --word-diff-regex=
 			--dirstat --dirstat= --dirstat-by-file

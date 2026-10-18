@@ -71,6 +71,7 @@ struct diff_options;
 struct diff_queue_struct;
 struct oid_array;
 struct option;
+struct provenance_diff;
 struct repository;
 struct rev_info;
 struct userdiff_driver;
@@ -206,6 +207,12 @@ struct diff_flags {
 	unsigned suppress_diff_headers;
 	unsigned dual_color_diffed_diffs;
 	unsigned suppress_hunk_header_line_count;
+
+	/**
+	 * Show the provenance mark of each line of the patch
+	 * ("--provenance"); see provenance-view.h.
+	 */
+	unsigned provenance;
 };
 
 static inline void diff_flags_or(struct diff_flags *a,
@@ -410,6 +417,9 @@ struct diff_options {
 
 	struct repository *repo;
 	struct strmap *additional_path_headers;
+
+	/* where the marks of "--provenance" come from */
+	struct provenance_diff *provenance;
 
 	int no_free;
 
