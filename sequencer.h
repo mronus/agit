@@ -320,6 +320,16 @@ int sequencer_get_last_command(struct repository* r,
 			       enum replay_action *action);
 int sequencer_determine_whence(struct repository *r, enum commit_whence *whence);
 
+/*
+ * The commit of the "fixup" or "squash" command that an interactive
+ * rebase in progress in `r` (with the merge backend) stopped at
+ * because applying it conflicted, as long as HEAD is still the commit
+ * it is to be squashed into; NULL otherwise.  The commit that concludes
+ * the command, whether "git rebase --continue" or the user makes it,
+ * carries over its provenance records.
+ */
+struct commit *rebase_stopped_fixup(struct repository *r);
+
 /**
  * Append the set of ref-OID pairs that are currently stored for the 'git
  * rebase --update-refs' feature if such a rebase is currently happening.

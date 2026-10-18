@@ -590,6 +590,12 @@ or reverted, as linkgit:git-cherry-pick[1] and linkgit:git-revert[1]
 describe.  If that commit has no line record, the lines taken from it
 are `UNKNOWN`.
 
+A commit made while an interactive rebase is stopped at a `fixup` or
+`squash` command whose changes conflict carries the records of the
+commit of that command.  With `--amend`, it unites them with those of
+`HEAD`, as `git rebase --continue` would (see linkgit:git-rebase[1]);
+without it, it carries them as a cherry-pick does.
+
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------
 The editor used to edit the commit log message will be chosen from the

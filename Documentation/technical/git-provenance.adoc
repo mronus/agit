@@ -558,6 +558,17 @@ a message, it names the source with a hidden option, as nothing else
 does for a clean revert or a squash; `git commit` run by hand finds it
 through `CHERRY_PICK_HEAD` or `REVERT_HEAD`.
 
+When `rebase -i` stops at a `fixup` or `squash` whose changes
+conflict, the user may conclude it by hand instead of with `rebase
+--continue`. `git commit` then finds that command's commit, as
+`rebase-merge/stopped-sha` names it and it is the last of
+`rebase-merge/current-fixups`, as long as `HEAD` is still the commit
+the rebase stopped with. `git commit --amend` gets the sources that
+`rebase --continue` would give it, `HEAD` and then that commit, and a
+plain `git commit` takes the commit as a pick, whose changes are found
+in the new commit. The following `rebase --continue` finds nothing
+left to commit and leaves the records alone.
+
 Not covered yet: merges recreated by `rebase --rebase-merges`,
 `git replay`, `git history`, and `git am` of mailbox patches, which
 have no source commit. Rewrites by tools that do not know the

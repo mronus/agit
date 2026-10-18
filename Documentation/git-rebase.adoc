@@ -1301,7 +1301,11 @@ lines of each commit keep their marks, a line that a later commit
 rewrote gets the actors of both, the sessions of the reasoning
 records are listed once, and their summaries are concatenated.  The
 lines of a commit without a line record are `UNKNOWN`, whether it is
-replayed on its own or combined with others.
+replayed on its own or combined with others.  When a `fixup` or
+`squash` stops with conflicts, concluding it with `git commit --amend`
+instead of `git rebase --continue` records the same; a plain `git
+commit` carries the records of the commit being squashed in to the new
+commit (see linkgit:git-commit[1]).
 
 A commit that the rebase does not replay, because it can fast-forward
 over it, keeps its records as they are.  Merges recreated by

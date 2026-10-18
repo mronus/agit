@@ -562,6 +562,71 @@ test_expect_success 'a fixup with conflicts carries the records of both commits'
 	git provenance show --reasoning HEAD >actual &&
 	test_grep "^session s1 " actual &&
 	test_grep "^session s2 " actual &&
+	git provenance verify HEAD &&
+	git tag fixup-conflicted
+'
+
+# Start "rebase -i base" with the todo list "pick ai", "fixup tres",
+# "<command> second", which stops at the conflicting third command, and
+# resolve the conflict.
+#
+# Usage: stop_at_fixup <branch> (fixup|squash)
+stop_at_fixup () {
+	test_tick &&
+	git checkout -b "$1" second &&
+	cat >todo.out <<-EOF &&
+	pick $(git rev-parse ai)
+	fixup $(git rev-parse tres)
+	$2 $(git rev-parse second)
+	EOF
+	test_must_fail env GIT_SEQUENCE_EDITOR="cp todo.out" \
+		git rebase -i base &&
+	git cat-file blob second:file >file &&
+	git add file
+}
+
+test_expect_success 'commit --amend at a conflicting fixup carries its records' '
+	stop_at_fixup fixup-amended fixup &&
+	git commit --amend --no-edit &&
+	same_records fixup-conflicted HEAD &&
+	git rebase --continue &&
+	same_records fixup-conflicted HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/rebase-merge &&
+
+	git commit --amend --no-edit &&
+	same_records fixup-conflicted HEAD
+'
+
+test_expect_success 'commit at a conflicting fixup takes it as a pick' '
+	stop_at_fixup fixup-committed fixup &&
+	git commit -m second-on-its-own &&
+	git rebase --continue &&
+	test_cmp_rev base HEAD~2 &&
+	{
+		header HEAD &&
+		echo "$s2_actor" &&
+		echo "actor s1 ai model=unknown tool=unknown session=s1 source=observed" &&
+		echo "$human_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s2 $(anchor HEAD file 3)" &&
+		echo "+ 5 AI s2 $(anchor HEAD file 5)" &&
+		echo "+ 12 AI s1 $(anchor HEAD file 12)" &&
+		echo "- 3 MIXED s2,human $(anchor HEAD^ file 3)" &&
+		echo "- 5 AI s2 $(anchor HEAD^ file 5)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance show --reasoning second >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'commit --amend at a conflicting squash carries its records' '
+	stop_at_fixup squash-amended squash &&
+	git commit --amend --no-edit &&
+	git rebase --continue &&
+	same_records fixup-conflicted HEAD &&
 	git provenance verify HEAD
 '
 

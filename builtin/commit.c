@@ -1705,7 +1705,9 @@ static int git_commit_config(const char *k, const char *v,
  * The commits that the commit about to be made rewrites: the commit
  * being amended, and the commit being picked or reverted, as named by
  * the sequencer with --provenance-pick or --provenance-revert, or by
- * the cherry-pick or revert in progress.
+ * the cherry-pick or revert in progress, or else the "fixup" or
+ * "squash" command that an interactive rebase stopped at because of
+ * conflicts.
  */
 static void determine_rewrite(struct commit *current_head,
 			      struct provenance_rewrite *rw)
@@ -1719,15 +1721,18 @@ static void determine_rewrite(struct commit *current_head,
 	} else if (provenance_revert) {
 		name = provenance_revert;
 		rw->revert = 1;
-	} else if (amend || whence == FROM_MERGE) {
+	} else if (whence == FROM_MERGE) {
 		return;
-	} else if (is_from_cherry_pick(whence) || whence == FROM_REBASE_PICK) {
+	} else if (!amend && (is_from_cherry_pick(whence) ||
+			      whence == FROM_REBASE_PICK)) {
 		name = "CHERRY_PICK_HEAD";
-	} else if (refs_ref_exists(get_main_ref_store(the_repository),
+	} else if (!amend &&
+		   refs_ref_exists(get_main_ref_store(the_repository),
 				   "REVERT_HEAD")) {
 		name = "REVERT_HEAD";
 		rw->revert = 1;
 	} else {
+		rw->pick = rebase_stopped_fixup(the_repository);
 		return;
 	}
 
