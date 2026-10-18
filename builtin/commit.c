@@ -1702,11 +1702,13 @@ static int git_commit_config(const char *k, const char *v,
 
 /*
  * Compute the records of the commit about to be made, with its first
- * parent among `parents`.  Dies if provenance.require is set and no
- * session is linked to the commit.
+ * parent among `parents`, carrying over those of the commits that `rw`
+ * names.  Dies if provenance.require is set and no session is linked
+ * to the commit.
  */
 static void compute_provenance(struct commit_list *parents,
 			       const char *author_ident,
+			       const struct provenance_rewrite *rw,
 			       struct provenance_record *lines,
 			       struct provenance_reasoning *reasoning)
 {
@@ -1715,7 +1717,7 @@ static void compute_provenance(struct commit_list *parents,
 	if (provenance_commit_records(the_repository,
 				      parents ? parents->item : NULL,
 				      &the_repository->index->cache_tree->oid,
-				      author_ident, provenance_session, NULL,
+				      author_ident, provenance_session, rw,
 				      lines, reasoning) < 0) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
@@ -1971,9 +1973,14 @@ int cmd_commit(int argc,
 		strbuf_release(&body);
 	}
 
-	if (record_provenance)
-		compute_provenance(parents, author_ident.buf,
+	if (record_provenance) {
+		struct provenance_rewrite rw = { 0 };
+
+		if (amend)
+			rw.amend = current_head;
+		compute_provenance(parents, author_ident.buf, &rw,
 				   &prov_lines, &prov_reasoning);
+	}
 
 	if (amend) {
 		const char *exclude_gpgsig[3] = { "gpgsig", "gpgsig-sha256", NULL };
