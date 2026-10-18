@@ -35,4 +35,31 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_record *lines,
 			 struct provenance_reasoning *reasoning);
 
+/*
+ * The attribution walk for one path at a time, as used to show the
+ * provenance of changes that are not committed yet.
+ *
+ * provenance_attribution_new() prepares to attribute changes against
+ * `base`, the tree of the commit that would be the first parent (or
+ * the empty tree), using the stamps in `journal`, which must outlive
+ * the result.  Release the result with provenance_attribution_free().
+ *
+ * provenance_attribute_path() attributes the lines of `path` whose
+ * content would be the `len` bytes at `buf` with mode `mode` (`buf` is
+ * NULL if the path would be deleted), relative to its version in
+ * `base`, exactly as provenance_attribute() would attribute them, and
+ * appends the block for `path`, if it gets one, to `lines`.  The
+ * content is not written to the object database.  Returns 0 on
+ * success, or -1 after reporting an error.
+ */
+struct provenance_attribution;
+
+struct provenance_attribution *
+provenance_attribution_new(struct repository *r, const struct object_id *base,
+			   const struct provenance_journal *journal);
+int provenance_attribute_path(struct provenance_attribution *pa,
+			      const char *path, const char *buf, size_t len,
+			      unsigned mode, struct provenance_record *lines);
+void provenance_attribution_free(struct provenance_attribution *pa);
+
 #endif /* PROVENANCE_ATTRIBUTE_H */
