@@ -553,29 +553,56 @@ through `CHERRY_PICK_HEAD` or `REVERT_HEAD`.
 Not covered yet: merges recreated by `rebase --rebase-merges`,
 `git replay`, `git history`, and `git am` of mailbox patches, which
 have no source commit. Rewrites by tools that do not know the
-extension are handled by re-anchoring.
+extension leave commits without records, which `git provenance adopt`
+repairs (see "Re-anchoring").
 
 Re-anchoring
 ~~~~~~~~~~~~
-This is planned for the second part of step 5 of the roadmap.
+Rewrites the extension did not see -- stock Git rebases and
+cherry-picks, a hosting service's "squash and merge", `filter-repo` --
+produce commits with no record, although the records of the commits
+they were made from usually exist, locally or fetched with
+`refs/provenance/lines`. `git provenance adopt <revision-range>`
+repairs them, oldest first:
 
-Rewrites the extension did not see -- stock Git rebases, a hosting
-service's "squash and merge", `filter-repo` -- produce commits with no
-record. `git provenance adopt <range>` (also run automatically after
-`fetch`) repairs them:
+1. The candidate sources of a commit are the commits that have a line
+   record, restricted with `--from <rev>` to those that `<rev>` can
+   reach. A candidate in the history of the commit is not its source;
+   one walk from all the commits being adopted finds those. Of the
+   rest, those whose record has a block for a path the commit changes
+   are its sources, oldest commit date first. No diff of a candidate
+   is needed for this.
 
-1. For a commit without a record, candidate source records are found
-   through the commits of the same branch or pull request, through
-   `patch-id`, or through time and path proximity.
+2. The attribution walk of "History rewriting" runs with these
+   sources, all found in the commit, and no journal. Lines are matched
+   by content, as for a cherry-pick, so a rewrite with the same patch
+   as its source gets all of its marks. A line the commit changes
+   takes the owners of the first source that has it as it is among
+   the lines its record covers, or failing that of the first that has
+   a line it replaces; the same goes for the lines it deletes:
++
+....
+ first parent ------------------------------------> adopted commit
+              marks of all sources, found together
+....
 
-2. For each added range of the new commit, matching anchors are looked
-   up in the candidate records. Where the content matches, the mark is
-   carried over.
+3. A line that no source accounts for, or that replaces a line of a
+   source, is `UNKNOWN`. `HUMAN` is never guessed: a line is `HUMAN`
+   only if a source record marks it so, and its human is then the
+   author of the commit.
 
-3. Ranges that do not match become `UNKNOWN`. `HUMAN` is never
-   guessed.
+4. The reasoning record collects the sessions and summaries of the
+   sources that some line of the commit was taken from, in the same
+   order.
 
-The resulting record is marked `adopted`.
+The resulting record is marked `adopted`. If no source accounts for
+any line, nothing is written: an all-`UNKNOWN` record would only stand
+in the way of adopting the commit once its sources have been fetched.
+A commit with a record is left alone, except that `--force` replaces
+an adopted record; merge commits are not adopted.
+
+Adopting is an explicit action, like `verify`, and does not depend on
+`provenance.enabled`.
 
 Transfer
 ~~~~~~~~
@@ -812,9 +839,9 @@ Each step is implemented and reviewed on its own:
 
 5. Rewrites: (a) remapping in amend, rebase and cherry-pick, with
    lines taken from commits without records marked `UNKNOWN`;
-   (b) `adopt` for foreign rewrites, the marks of lines a revert
-   restores taken from a blame of the parent, and the records of a
-   fixup or squash finished by a hand-run `git commit --amend`.
+   (b) `adopt` for foreign rewrites (done), the marks of lines a
+   revert restores taken from a blame of the parent, and the records
+   of a fixup or squash finished by a hand-run `git commit --amend`.
 
 6. Hardening: `purge`, `fast-export`/`fast-import` and `format-patch`
    support, recording the conflict resolutions of merge commits, the
@@ -870,6 +897,9 @@ Future Work
 
 - Coverage checking in `provenance verify`: that the recorded ranges
   match the commit's actual diff.
+
+- Adopting the commits that `fetch` brings in, through a hook or an
+  opt-in configuration.
 
 Related Links
 -------------
