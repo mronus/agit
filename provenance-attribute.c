@@ -31,9 +31,10 @@
 /*
  * A set of actors, sorted by actor index.  Actors 0 to sessions_nr - 1
  * are the sessions of the journal, in the order in which they appear
- * in it, and actor sessions_nr is the human making the commit.  Sets
- * are interned, so that two lines have the same owners exactly if they
- * have the same set index.
+ * in it, followed by the AI actors that only the line records of the
+ * sources of a rewrite declare, and actor sessions_nr is the human
+ * making the commit.  Sets are interned, so that two lines have the
+ * same owners exactly if they have the same set index.
  */
 struct owner_set {
 	int *actors;
@@ -64,6 +65,10 @@ struct session_info {
 	unsigned claim_all : 1;
 	/* the session owns a line of the commit */
 	unsigned attached : 1;
+	/* the session is only known from the line record of a source */
+	unsigned imported : 1;
+	/* the "source" of the actor in the line record of a source, or NULL */
+	const char *source;
 };
 
 /* A path changed by an interval. */
@@ -80,9 +85,24 @@ struct interval {
 	struct strmap changes;
 };
 
+/* A source of a rewrite. */
+struct seed {
+	const struct provenance_source *src;
+	/* the trees of the source and of its first parent */
+	const struct object_id *post_tree;
+	const struct object_id *pre_tree;
+	/* per actor of the source's line record: its index, -1 for a human */
+	int *actors;
+};
+
 struct attribution {
 	struct repository *r;
 	const struct provenance_journal *journal;
+
+	struct seed *seeds;
+	size_t seeds_nr;
+	/* the commit undoes the changes of its only source */
+	int revert;
 
 	struct session_info *sessions;
 	size_t sessions_nr, sessions_alloc;
@@ -311,8 +331,6 @@ static void collect_sessions(struct attribution *a, const char *session)
 		}
 	}
 
-	a->human = a->sessions_nr;
-	CALLOC_ARRAY(a->rank, a->sessions_nr + 1);
 	for (size_t i = 0; i < a->sessions_nr; i++) {
 		struct session_info *s = &a->sessions[i];
 
@@ -486,6 +504,13 @@ static void file_state_release(struct file_state *fs)
 struct step {
 	struct attribution *a;
 	int actor;
+	/*
+	 * If not NULL, who owns the lines that the step changes, per line
+	 * of the new version, and the lines of the first parent that it
+	 * deletes, per line of the first parent; `actor` is then unused.
+	 */
+	const int *seed;
+	const int *pre_seed;
 	const struct line_owner *old;
 	struct line_owner *new;
 	int *deleted;
@@ -500,8 +525,24 @@ static void step_unchanged(struct step *st, long until_a)
 
 static void step_delete(struct step *st, const struct line_owner *o)
 {
-	if (o->set == BASELINE)
-		st->deleted[o->base - 1] = singleton(st->a, st->actor);
+	if (o->set != BASELINE)
+		return;
+	st->deleted[o->base - 1] = st->pre_seed ? st->pre_seed[o->base - 1] :
+				   singleton(st->a, st->actor);
+}
+
+/* The owner of the line `b` of the new version, which the step changes. */
+static int step_owner(struct step *st, long b)
+{
+	return st->seed ? st->seed[b] : singleton(st->a, st->actor);
+}
+
+/* Return the set `set` with the actors of the set `other` added. */
+static int set_union(struct attribution *a, int set, int other)
+{
+	for (size_t i = 0; i < a->sets[other].nr; i++)
+		set = set_add(a, set, a->sets[other].actors[i]);
+	return set;
 }
 
 static int step_hunk(long start_a, long count_a,
@@ -520,7 +561,9 @@ static int step_hunk(long start_a, long count_a,
 
 		if (o->set == BASELINE) {
 			step_delete(st, o);
-			n->set = singleton(st->a, st->actor);
+			n->set = step_owner(st, start_b + i);
+		} else if (st->seed) {
+			n->set = set_union(st->a, o->set, st->seed[start_b + i]);
 		} else {
 			n->set = set_add(st->a, o->set, st->actor);
 		}
@@ -528,7 +571,7 @@ static int step_hunk(long start_a, long count_a,
 	for (long i = paired; i < count_a; i++)
 		step_delete(st, &st->old[start_a + i]);
 	for (long i = paired; i < count_b; i++)
-		st->new[start_b + i].set = singleton(st->a, st->actor);
+		st->new[start_b + i].set = step_owner(st, start_b + i);
 
 	st->pos_a = start_a + count_a;
 	st->pos_b = start_b + count_b;
@@ -552,14 +595,19 @@ static int diff_hunks(mmfile_t *file_a, mmfile_t *file_b,
  * Move the file from its current version to `next`, whose content is
  * `content`, made by `actor`: lines the step leaves alone keep their
  * owners, lines it changes gain `actor`, and lines it adds belong to
- * `actor` alone.  Takes ownership of `content`.
+ * `actor` alone.  With `seed` and `pre_seed` (see struct step), the
+ * owners they give take the place of `actor`.  Takes ownership of
+ * `content`.
  */
-static int step_to(struct attribution *a, struct file_state *fs,
-		   mmfile_t content, const struct object_id *next, int actor)
+static int step_seeded(struct attribution *a, struct file_state *fs,
+		       mmfile_t content, const struct object_id *next,
+		       int actor, const int *seed, const int *pre_seed)
 {
 	struct step st = {
 		.a = a,
 		.actor = actor,
+		.seed = seed,
+		.pre_seed = pre_seed,
 		.old = fs->owners,
 		.deleted = fs->deleted,
 	};
@@ -588,6 +636,12 @@ static int step_to(struct attribution *a, struct file_state *fs,
 	return 0;
 }
 
+static int step_to(struct attribution *a, struct file_state *fs,
+		   mmfile_t content, const struct object_id *next, int actor)
+{
+	return step_seeded(a, fs, content, next, actor, NULL, NULL);
+}
+
 /* As step_to(), with the content of the blob `next`. */
 static int step(struct attribution *a, struct file_state *fs,
 		const struct object_id *next, int actor)
@@ -614,6 +668,222 @@ static int read_side(struct attribution *a,
 	mf->ptr = xmemdupz(spec->data, spec->size);
 	mf->size = spec->size;
 	return 0;
+}
+
+/* Read `path` of `tree` and its blob id: empty unless a regular file. */
+static int read_path(struct attribution *a, const struct object_id *tree,
+		     const char *path, struct object_id *oid, mmfile_t *mf)
+{
+	unsigned short mode;
+
+	if (oideq(tree, a->r->hash_algo->empty_tree) ||
+	    get_tree_entry(a->r, tree, path, oid, &mode) || !S_ISREG(mode))
+		oidcpy(oid, a->r->hash_algo->empty_blob);
+	return read_blob(a, oid, mf);
+}
+
+/*
+ * The set of the actors `ids` of a range of the line record of `seed`,
+ * or -1 if it names none.
+ */
+static int seed_set(struct attribution *a, const struct seed *seed,
+		    const char *ids)
+{
+	const struct provenance_record *rec = seed->src->lines;
+	int set = -1;
+
+	while (*ids) {
+		size_t len = strcspn(ids, ",");
+		const struct provenance_actor *actor =
+			provenance_record_actor(rec, ids, len);
+
+		if (actor) {
+			int i = seed->actors[actor - rec->actors];
+
+			if (i < 0)
+				i = a->human;
+			set = set < 0 ? singleton(a, i) : set_add(a, set, i);
+		}
+		ids += len;
+		if (*ids)
+			ids++;
+	}
+	return set;
+}
+
+/*
+ * Per line of `content`, which is the version of `path` on `side` of
+ * the line record of `seed`: the set of the range of the record that
+ * contains the line, or -1.
+ */
+static int *seed_lines(struct attribution *a, const struct seed *seed,
+		       const char *path, char side, const mmfile_t *content)
+{
+	const struct provenance_file *file =
+		provenance_record_file(seed->src->lines, path);
+	size_t nr = count_lines(content);
+	int *sets;
+
+	ALLOC_ARRAY(sets, nr);
+	for (size_t i = 0; i < nr; i++)
+		sets[i] = -1;
+	for (size_t i = 0; file && i < file->ranges_nr; i++) {
+		const struct provenance_range *range = &file->ranges[i];
+		int set;
+
+		if (range->side != side || !range->begin)
+			continue;
+		set = seed_set(a, seed, range->actors);
+		for (unsigned long l = range->begin; l <= range->end && l <= nr; l++)
+			sets[l - 1] = set;
+	}
+	return sets;
+}
+
+struct transplant {
+	struct attribution *a;
+	const int *from;
+	int *to;
+	long pos_a, pos_b;
+};
+
+static void transplant_unchanged(struct transplant *t, long until_a)
+{
+	int human = singleton(t->a, t->a->human);
+
+	while (t->pos_a < until_a) {
+		int set = t->from[t->pos_a++];
+
+		t->to[t->pos_b++] = set < 0 ? human : set;
+	}
+}
+
+static int transplant_hunk(long start_a, long count_a,
+			   long start_b, long count_b, void *data)
+{
+	struct transplant *t = data;
+	struct attribution *a = t->a;
+	int human = singleton(a, a->human);
+
+	transplant_unchanged(t, start_a);
+	if (t->pos_b != start_b)
+		BUG("provenance: unchanged lines out of step");
+	for (long i = 0; i < count_b; i++) {
+		int set = i < count_a ? t->from[start_a + i] : -1;
+
+		t->to[start_b + i] = set < 0 ? human : set_add(a, set, a->human);
+	}
+	t->pos_a = start_a + count_a;
+	t->pos_b = start_b + count_b;
+	return 0;
+}
+
+/*
+ * Who owns each line of `to`, if `from` is owned as `sets` says (-1
+ * for a line nobody is known to own) and the human made `to` from it:
+ * a line kept keeps its owner, a line that replaces one gains the
+ * human, and every other line is the human's.  Returns NULL if the
+ * versions cannot be compared.
+ */
+static int *transplant(struct attribution *a, mmfile_t *from,
+		       const int *sets, mmfile_t *to)
+{
+	struct transplant t = { .a = a, .from = sets };
+	size_t nr = count_lines(to);
+
+	ALLOC_ARRAY(t.to, nr);
+	if (diff_hunks(from, to, transplant_hunk, &t)) {
+		free(t.to);
+		return NULL;
+	}
+	transplant_unchanged(&t, count_lines(from));
+	if ((size_t)t.pos_b != nr)
+		BUG("provenance: transplant produced %ld lines, expected %"PRIuMAX,
+		    t.pos_b, (uintmax_t)nr);
+	return t.to;
+}
+
+static int has_seed(struct attribution *a, const char *path)
+{
+	for (size_t i = 0; i < a->seeds_nr; i++)
+		if (provenance_record_file(a->seeds[i].src->lines, path))
+			return 1;
+	return 0;
+}
+
+/*
+ * Move the file, which is at its version in the first parent, through
+ * the changes of each source of a rewrite whose line record has a
+ * block for it.  The changes of a source are those from the pre-image
+ * of its record to the post-image, or the reverse for a revert.  They
+ * are found in the post-image of the source, except for the last one,
+ * whose changes are found in `next`, the next version of the chain,
+ * or if it is NULL in `two`, whose blob id is `post`.  The lines and
+ * the deletions that the record covers get its owners; the human owns
+ * the rest, and gains the lines that differ from the version of the
+ * source.
+ */
+static int seed_file(struct attribution *a, const char *path,
+		     struct file_state *fs, const struct object_id *next,
+		     struct diff_filespec *two, const struct object_id *post)
+{
+	char added = a->revert ? '-' : '+', removed = a->revert ? '+' : '-';
+	mmfile_t base;
+	int ret = 0;
+
+	if (read_blob(a, &fs->oid, &base))
+		return -1;
+	for (size_t i = 0; !ret && i < a->seeds_nr; i++) {
+		const struct seed *seed = &a->seeds[i];
+		const struct object_id *new_tree, *old_tree;
+		mmfile_t new = { 0 }, old = { 0 }, found = { 0 };
+		struct object_id new_oid, old_oid, found_oid;
+		int *new_sets, *old_sets, *owners = NULL, *deleters = NULL;
+
+		if (!provenance_record_file(seed->src->lines, path))
+			continue;
+		new_tree = a->revert ? seed->pre_tree : seed->post_tree;
+		old_tree = a->revert ? seed->post_tree : seed->pre_tree;
+		if (read_path(a, new_tree, path, &new_oid, &new) ||
+		    read_path(a, old_tree, path, &old_oid, &old)) {
+			ret = -1;
+		} else if (i + 1 < a->seeds_nr) {
+			found.ptr = xmemdupz(new.ptr, new.size);
+			found.size = new.size;
+			oidcpy(&found_oid, &new_oid);
+		} else if (next) {
+			ret = read_blob(a, next, &found);
+			oidcpy(&found_oid, next);
+		} else {
+			ret = read_side(a, two, &found);
+			oidcpy(&found_oid, post);
+		}
+
+		if (!ret) {
+			new_sets = seed_lines(a, seed, path, added, &new);
+			old_sets = seed_lines(a, seed, path, removed, &old);
+			owners = transplant(a, &new, new_sets, &found);
+			deleters = transplant(a, &old, old_sets, &base);
+			free(new_sets);
+			free(old_sets);
+			if (!owners || !deleters) {
+				ret = error(_("unable to diff '%s' with its version in %s"),
+					    path, oid_to_hex(&seed->src->commit->object.oid));
+				free(found.ptr);
+			} else {
+				ret = step_seeded(a, fs, found, &found_oid, a->human,
+						  owners, deleters);
+			}
+		} else {
+			free(found.ptr);
+		}
+		free(new.ptr);
+		free(old.ptr);
+		free(owners);
+		free(deleters);
+	}
+	free(base.ptr);
+	return ret;
 }
 
 /* Give the human lines of claimed paths to the declared sessions. */
@@ -814,7 +1084,7 @@ static int attribute_file(struct attribution *a, const char *path,
 		chain_nr++;
 	}
 
-	if (!DIFF_FILE_VALID(one) && !chain_nr) {
+	if (!DIFF_FILE_VALID(one) && !chain_nr && !has_seed(a, path)) {
 		/* a new file that no session touched: no need to diff */
 		int human = singleton(a, a->human);
 
@@ -845,6 +1115,10 @@ static int attribute_file(struct attribution *a, const char *path,
 			fs.deleted[i] = -1;
 		}
 
+		if (has_seed(a, path))
+			ret = seed_file(a, path, &fs,
+					chain_nr ? &chain[0].change->pre : NULL,
+					two, &post);
 		for (size_t i = 0; !ret && i < chain_nr; i++) {
 			const struct change *c = chain[i].change;
 
@@ -902,15 +1176,19 @@ static void add_actors(struct attribution *a, const char *human,
 			actor->model = xstrdup(s->model ? s->model : "unknown");
 			actor->tool = xstrdup(s->tool ? s->tool : "unknown");
 			actor->session = xstrdup(s->id);
-			actor->source = xstrdup(s->stamped ? "observed" : "declared");
+			actor->source = xstrdup(s->source ? s->source :
+						s->stamped ? "observed" : "declared");
 			ai = 1;
 		}
 	}
 
 	/* declared if AI is involved and no session was observed */
-	for (size_t i = 0; ai && i < a->sessions_nr; i++)
-		if (a->sessions[i].stamped)
+	for (size_t i = 0; ai && i < a->sessions_nr; i++) {
+		const struct session_info *s = &a->sessions[i];
+
+		if (s->source ? !strcmp(s->source, "observed") : s->stamped)
 			ai = 0;
+	}
 	if (ai) {
 		rec->capture = PROVENANCE_CAPTURE_DECLARED;
 	} else {
@@ -924,15 +1202,22 @@ static void add_session(struct attribution *a, int i,
 {
 	const struct session_info *s = &a->sessions[i];
 	struct provenance_session *out;
+	size_t j;
 
-	ALLOC_GROW(reasoning->sessions, reasoning->sessions_nr + 1,
-		   reasoning->sessions_alloc);
-	out = &reasoning->sessions[reasoning->sessions_nr++];
-	out->id = xstrdup(s->id);
-	out->model = xstrdup(s->model ? s->model : "unknown");
-	out->tool = xstrdup(s->tool ? s->tool : "unknown");
-	out->started = s->started;
-	out->ended = s->ended;
+	/* a session of a source may have stamps in the journal, too */
+	for (j = 0; j < reasoning->sessions_nr; j++)
+		if (!strcmp(reasoning->sessions[j].id, s->id))
+			break;
+	if (j == reasoning->sessions_nr) {
+		ALLOC_GROW(reasoning->sessions, reasoning->sessions_nr + 1,
+			   reasoning->sessions_alloc);
+		out = &reasoning->sessions[reasoning->sessions_nr++];
+		out->id = xstrdup(s->id);
+		out->model = xstrdup(s->model ? s->model : "unknown");
+		out->tool = xstrdup(s->tool ? s->tool : "unknown");
+		out->started = s->started;
+		out->ended = s->ended;
+	}
 
 	if (s->summary) {
 		mmfile_t summary;
@@ -965,7 +1250,8 @@ static void add_sessions(struct attribution *a, const char *session,
 
 		while (a->rank[i] != rank)
 			i++;
-		if (i != a->human && a->sessions[i].attached)
+		if (i != a->human && a->sessions[i].attached &&
+		    !a->sessions[i].imported)
 			add_session(a, i, reasoning);
 	}
 	if (session) {
@@ -982,21 +1268,103 @@ struct provenance_attribution {
 	struct object_id base;
 };
 
-static void attribution_init(struct attribution *a, struct repository *r,
-			     const struct object_id *base,
-			     const struct provenance_journal *journal,
-			     const char *session)
+/*
+ * Declare the AI actors of the line record of `seed`.  An actor whose
+ * id is already declared is that actor; the first declaration from a
+ * record gives its metadata.
+ */
+static void import_actors(struct attribution *a, struct seed *seed)
 {
+	const struct provenance_record *rec = seed->src->lines;
+
+	ALLOC_ARRAY(seed->actors, rec->actors_nr);
+	for (size_t i = 0; i < rec->actors_nr; i++) {
+		const struct provenance_actor *actor = &rec->actors[i];
+		struct session_info *s;
+		size_t j;
+
+		seed->actors[i] = -1;
+		if (actor->kind != PROVENANCE_ACTOR_AI)
+			continue;
+		for (j = 0; j < a->sessions_nr; j++)
+			if (!strcmp(a->sessions[j].actor_id, actor->id))
+				break;
+		if (j == a->sessions_nr) {
+			ALLOC_GROW(a->sessions, a->sessions_nr + 1,
+				   a->sessions_alloc);
+			s = &a->sessions[a->sessions_nr++];
+			memset(s, 0, sizeof(*s));
+			s->id = actor->session;
+			s->actor_id = xstrdup(actor->id);
+			string_list_init_dup(&s->claims);
+			s->imported = 1;
+		}
+		s = &a->sessions[j];
+		if (!s->source) {
+			s->model = actor->model;
+			s->tool = actor->tool;
+			s->source = actor->source;
+		}
+		seed->actors[i] = j;
+	}
+}
+
+static int add_seeds(struct attribution *a,
+		     const struct provenance_source *sources, size_t nr)
+{
+	CALLOC_ARRAY(a->seeds, nr);
+	for (size_t i = 0; i < nr; i++) {
+		struct seed *seed = &a->seeds[a->seeds_nr];
+		struct commit *c = sources[i].commit;
+
+		if (repo_parse_commit(a->r, c))
+			return error(_("could not parse commit %s"),
+				     oid_to_hex(&c->object.oid));
+		seed->src = &sources[i];
+		seed->post_tree = get_commit_tree_oid(c);
+		seed->pre_tree = a->r->hash_algo->empty_tree;
+		if (c->parents) {
+			struct commit *parent = c->parents->item;
+
+			if (repo_parse_commit(a->r, parent))
+				return error(_("could not parse commit %s"),
+					     oid_to_hex(&parent->object.oid));
+			seed->pre_tree = get_commit_tree_oid(parent);
+		}
+		import_actors(a, seed);
+		a->seeds_nr++;
+	}
+	return 0;
+}
+
+static int attribution_init(struct attribution *a, struct repository *r,
+			    const struct object_id *base,
+			    const struct provenance_journal *journal,
+			    const char *session,
+			    const struct provenance_source *sources,
+			    size_t nr, int revert)
+{
+	int ret;
+
 	memset(a, 0, sizeof(*a));
 	a->r = r;
 	a->journal = journal;
+	a->revert = revert;
 	CALLOC_ARRAY(a->warned, journal->nr);
 	collect_sessions(a, session);
-	collect_intervals(a, base);
+	ret = add_seeds(a, sources, nr);
+	a->human = a->sessions_nr;
+	CALLOC_ARRAY(a->rank, a->sessions_nr + 1);
+	if (!ret)
+		collect_intervals(a, base);
+	return ret;
 }
 
 static void attribution_release(struct attribution *a)
 {
+	for (size_t i = 0; i < a->seeds_nr; i++)
+		free(a->seeds[i].actors);
+	free(a->seeds);
 	for (size_t i = 0; i < a->sessions_nr; i++) {
 		string_list_clear(&a->sessions[i].claims, 0);
 		free(a->sessions[i].actor_id);
@@ -1020,7 +1388,7 @@ provenance_attribution_new(struct repository *r, const struct object_id *base,
 
 	CALLOC_ARRAY(pa, 1);
 	oidcpy(&pa->base, base);
-	attribution_init(&pa->a, r, &pa->base, journal, NULL);
+	attribution_init(&pa->a, r, &pa->base, journal, NULL, NULL, 0, 0);
 	return pa;
 }
 
@@ -1058,6 +1426,36 @@ void provenance_attribution_free(struct provenance_attribution *pa)
 	free(pa);
 }
 
+/* Add the sessions and the summary of `from` that `to` does not have. */
+static void copy_reasoning(const struct provenance_reasoning *from,
+			   struct provenance_reasoning *to)
+{
+	for (size_t i = 0; i < from->sessions_nr; i++) {
+		const struct provenance_session *s = &from->sessions[i];
+		struct provenance_session *out;
+		size_t j;
+
+		for (j = 0; j < to->sessions_nr; j++)
+			if (!strcmp(to->sessions[j].id, s->id))
+				break;
+		if (j < to->sessions_nr)
+			continue;
+		ALLOC_GROW(to->sessions, to->sessions_nr + 1, to->sessions_alloc);
+		out = &to->sessions[to->sessions_nr++];
+		out->id = xstrdup(s->id);
+		out->model = xstrdup_or_null(s->model);
+		out->tool = xstrdup_or_null(s->tool);
+		out->started = s->started;
+		out->ended = s->ended;
+	}
+	if (from->summary.len) {
+		if (to->summary.len)
+			strbuf_addch(&to->summary, '\n');
+		strbuf_addbuf(&to->summary, &from->summary);
+		strbuf_complete_line(&to->summary);
+	}
+}
+
 int provenance_attribute(struct repository *r,
 			 struct commit *parent,
 			 const struct object_id *tree,
@@ -1067,11 +1465,29 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_record *lines,
 			 struct provenance_reasoning *reasoning)
 {
+	return provenance_attribute_rewrite(r, parent, tree, NULL, 0, 0,
+					    journal, session, human,
+					    lines, reasoning);
+}
+
+int provenance_attribute_rewrite(struct repository *r,
+				 struct commit *parent,
+				 const struct object_id *tree,
+				 const struct provenance_source *sources,
+				 size_t nr, int revert,
+				 const struct provenance_journal *journal,
+				 const char *session,
+				 const char *human,
+				 struct provenance_record *lines,
+				 struct provenance_reasoning *reasoning)
+{
 	struct attribution a;
 	const struct object_id *base = r->hash_algo->empty_tree;
 	struct diff_options opt;
 	int ret = 0;
 
+	if (revert && nr != 1)
+		BUG("provenance: a revert has %"PRIuMAX" sources", (uintmax_t)nr);
 	if (parent) {
 		if (repo_parse_commit(r, parent))
 			return error(_("could not parse commit %s"),
@@ -1079,7 +1495,11 @@ int provenance_attribute(struct repository *r,
 		base = get_commit_tree_oid(parent);
 	}
 
-	attribution_init(&a, r, base, journal, session);
+	if (attribution_init(&a, r, base, journal, session,
+			     sources, nr, revert)) {
+		attribution_release(&a);
+		return -1;
+	}
 
 	lines->version = 1;
 	repo_diff_setup(r, &opt);
@@ -1099,6 +1519,9 @@ int provenance_attribute(struct repository *r,
 
 	if (!ret) {
 		add_actors(&a, human, lines);
+		for (size_t i = 0; !revert && i < nr; i++)
+			if (sources[i].reasoning)
+				copy_reasoning(sources[i].reasoning, reasoning);
 		add_sessions(&a, session, reasoning);
 	}
 	attribution_release(&a);
