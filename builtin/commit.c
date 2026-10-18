@@ -135,6 +135,7 @@ static int no_post_rewrite, allow_empty_message, pathspec_file_nul;
 static const char *untracked_files_arg, *force_date, *ignore_submodule_arg, *ignored_arg;
 static const char *sign_commit, *pathspec_from_file;
 static const char *provenance_session;
+static const char *provenance_pick, *provenance_revert;
 static struct strvec trailer_args = STRVEC_INIT;
 
 /*
@@ -1701,34 +1702,75 @@ static int git_commit_config(const char *k, const char *v,
 }
 
 /*
+ * The commits that the commit about to be made rewrites: the commit
+ * being amended, and the commit being picked or reverted, as named by
+ * the sequencer with --provenance-pick or --provenance-revert, or by
+ * the cherry-pick or revert in progress.
+ */
+static void determine_rewrite(struct commit *current_head,
+			      struct provenance_rewrite *rw)
+{
+	const char *name;
+
+	if (amend)
+		rw->amend = current_head;
+	if (provenance_pick) {
+		name = provenance_pick;
+	} else if (provenance_revert) {
+		name = provenance_revert;
+		rw->revert = 1;
+	} else if (amend || whence == FROM_MERGE) {
+		return;
+	} else if (is_from_cherry_pick(whence) || whence == FROM_REBASE_PICK) {
+		name = "CHERRY_PICK_HEAD";
+	} else if (refs_ref_exists(get_main_ref_store(the_repository),
+				   "REVERT_HEAD")) {
+		name = "REVERT_HEAD";
+		rw->revert = 1;
+	} else {
+		return;
+	}
+
+	rw->pick = lookup_commit_reference_by_name(name);
+	if (!rw->pick) {
+		rollback_index_files();
+		die(_("could not lookup commit '%s'"), name);
+	}
+}
+
+/*
  * Compute the records of the commit about to be made, with its first
  * parent among `parents`, carrying over those of the commits that `rw`
- * names.  Dies if provenance.require is set and no session is linked
- * to the commit.
+ * names.  Returns 1 if the commit gets records, and 0 if it rewrites
+ * commits without any.  Dies if provenance.require is set and no
+ * session is linked to a commit that does not pick or revert another.
  */
-static void compute_provenance(struct commit_list *parents,
-			       const char *author_ident,
-			       const struct provenance_rewrite *rw,
-			       struct provenance_record *lines,
-			       struct provenance_reasoning *reasoning)
+static int compute_provenance(struct commit_list *parents,
+			      const char *author_ident,
+			      const struct provenance_rewrite *rw,
+			      struct provenance_record *lines,
+			      struct provenance_reasoning *reasoning)
 {
 	int require = 0;
+	int ret;
 
-	if (provenance_commit_records(the_repository,
-				      parents ? parents->item : NULL,
-				      &the_repository->index->cache_tree->oid,
-				      author_ident, provenance_session, rw,
-				      lines, reasoning) < 0) {
+	ret = provenance_commit_records(the_repository,
+					parents ? parents->item : NULL,
+					&the_repository->index->cache_tree->oid,
+					author_ident, provenance_session, rw,
+					lines, reasoning);
+	if (ret < 0) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
 	}
 
-	if (!reasoning->sessions_nr &&
+	if (ret && !rw->pick && !reasoning->sessions_nr &&
 	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
 	    require) {
 		rollback_index_files();
 		die(_("no session is linked to this commit and provenance.require is set"));
 	}
+	return ret;
 }
 
 int cmd_commit(int argc,
@@ -1775,6 +1817,13 @@ int cmd_commit(int argc,
 		},
 		OPT_STRING(0, "session", &provenance_session, N_("id"),
 			   N_("the AI agent session that made the change")),
+		/* used by the sequencer */
+		OPT_STRING_F(0, "provenance-pick", &provenance_pick,
+			     N_("commit"), N_("the commit being picked"),
+			     PARSE_OPT_HIDDEN),
+		OPT_STRING_F(0, "provenance-revert", &provenance_revert,
+			     N_("commit"), N_("the commit being reverted"),
+			     PARSE_OPT_HIDDEN),
 		/* end commit message options */
 
 		OPT_GROUP(N_("Commit contents options")),
@@ -1835,7 +1884,7 @@ int cmd_commit(int argc,
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
-	int record_provenance;
+	int record_provenance, have_provenance = 0;
 	int ret = 0;
 
 	show_usage_with_options_if_asked(argc, argv,
@@ -1871,6 +1920,10 @@ int cmd_commit(int argc,
 
 	if (provenance_session && !provenance_session_is_valid(provenance_session))
 		die(_("invalid session id '%s'"), provenance_session);
+	die_for_incompatible_opt2(!!provenance_pick, "--provenance-pick",
+				  !!provenance_revert, "--provenance-revert");
+	die_for_incompatible_opt2(amend, "--amend",
+				  !!provenance_revert, "--provenance-revert");
 
 	if (cleanup_arg) {
 		free(cleanup_config);
@@ -1976,10 +2029,10 @@ int cmd_commit(int argc,
 	if (record_provenance) {
 		struct provenance_rewrite rw = { 0 };
 
-		if (amend)
-			rw.amend = current_head;
-		compute_provenance(parents, author_ident.buf, &rw,
-				   &prov_lines, &prov_reasoning);
+		determine_rewrite(current_head, &rw);
+		have_provenance = compute_provenance(parents, author_ident.buf,
+						     &rw, &prov_lines,
+						     &prov_reasoning);
 	}
 
 	if (amend) {
@@ -2003,7 +2056,7 @@ int cmd_commit(int argc,
 	if (!transaction ||
 	    queue_head_update_with_reflog(transaction, current_head, &oid,
 					  reflog_msg, &sb, &err) ||
-	    (record_provenance &&
+	    (have_provenance &&
 	     provenance_queue_records(the_repository, transaction, &oid,
 				      &prov_lines, &prov_reasoning,
 				      reflog_msg, &err)) ||
@@ -2052,7 +2105,7 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
-	if (record_provenance && !prov_reasoning.sessions_nr)
+	if (have_provenance && !prov_reasoning.sessions_nr)
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"
 				    "LLM session, provide its details with --session"));
