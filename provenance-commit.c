@@ -86,41 +86,30 @@ int provenance_commit_records(struct repository *r,
 	struct provenance_source sources[2];
 	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
 	struct ident_split ident;
-	size_t commits_nr = 0, nr = 0;
+	size_t nr = 0;
 	char *human = NULL;
-	int ret = 1;
+	int ret = 0;
 
 	if (rw && rw->amend)
-		commits[commits_nr++] = rw->amend;
+		commits[nr++] = rw->amend;
 	if (rw && rw->pick)
-		commits[commits_nr++] = rw->pick;
+		commits[nr++] = rw->pick;
 	if (rw && rw->revert && (rw->amend || !rw->pick))
 		BUG("provenance: a revert must have a pick and no amend");
 
-	for (size_t i = 0; i < commits_nr; i++) {
+	/* the changes of a commit without a line record are UNKNOWN */
+	for (size_t i = 0; i < nr; i++) {
 		int has_reasoning;
+		int has_lines = read_source(r, commits[i], &records[i],
+					    &reasonings[i], &has_reasoning);
 
-		switch (read_source(r, commits[i], &records[i],
-				    &reasonings[i], &has_reasoning)) {
-		case -1:
+		if (has_lines < 0) {
 			ret = -1;
 			goto out;
-		case 0:
-			continue;
 		}
-		sources[nr].commit = commits[i];
-		sources[nr].lines = &records[i];
-		sources[nr].reasoning = has_reasoning ? &reasonings[i] : NULL;
-		nr++;
-	}
-
-	/*
-	 * The changes of commits without records stay unknown; a commit
-	 * that is amended is replaced by one with a record all the same.
-	 */
-	if (!nr && rw && rw->pick) {
-		ret = 0;
-		goto out;
+		sources[i].commit = commits[i];
+		sources[i].lines = has_lines ? &records[i] : NULL;
+		sources[i].reasoning = has_reasoning ? &reasonings[i] : NULL;
 	}
 
 	if (split_ident_line(&ident, author, strlen(author))) {

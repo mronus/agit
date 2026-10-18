@@ -271,8 +271,10 @@ an AI line becomes `MIXED`.  Stamps made with linkgit:git-stamp[1]
 while resolving conflicts are used as by linkgit:git-commit[1].  The
 reasoning record of the picked commit is copied.
 
-A commit picked from one without a line record gets no records
-either.  With `--no-commit`, the commit made afterwards is recorded
+If the picked commit has no line record, as when it was made with a
+Git that does not record them, the lines taken from it and the lines
+it removes are `UNKNOWN`, and a line of a resolution that replaces
+such a line stays `UNKNOWN`.  With `--no-commit`, the commit made afterwards is recorded
 like any other.
 
 SEE ALSO

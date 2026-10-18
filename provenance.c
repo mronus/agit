@@ -681,9 +681,6 @@ static int verify_actors(const struct provenance_record *rec,
 	const char *p = range->actors;
 
 	if (range->mark == PROVENANCE_MARK_UNKNOWN) {
-		if (rec->capture != PROVENANCE_CAPTURE_ADOPTED)
-			return range_error(err, file, range,
-					   _("UNKNOWN mark requires 'capture adopted'"));
 		if (strcmp(range->actors, "-"))
 			return range_error(err, file, range,
 					   _("UNKNOWN mark requires actor list '-'"));

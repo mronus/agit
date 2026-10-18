@@ -166,7 +166,8 @@ conflict resolution, are recorded as by linkgit:git-cherry-pick[1].
 The reasoning of the reverted commit explains the change, not its
 revert, and is not copied; the revert gets a reasoning record only
 from the stamps it uses (see linkgit:git-stamp[1]), like any commit.
-A revert of a commit without a line record gets no records.
+The lines that a revert of a commit without a line record removes and
+restores are `UNKNOWN`.
 
 CONFIGURATION
 -------------

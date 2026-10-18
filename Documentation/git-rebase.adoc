@@ -1299,7 +1299,9 @@ reworded, or amended when the rebase stops at it, keeps them as with
 `fixup` unite the records of the commits they combine, in order: the
 lines of each commit keep their marks, a line that a later commit
 rewrote gets the actors of both, the sessions of the reasoning
-records are listed once, and their summaries are concatenated.
+records are listed once, and their summaries are concatenated.  The
+lines of a commit without a line record are `UNKNOWN`, whether it is
+replayed on its own or combined with others.
 
 A commit that the rebase does not replay, because it can fast-forward
 over it, keeps its records as they are.  Merges recreated by

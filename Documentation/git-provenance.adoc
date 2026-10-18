@@ -48,8 +48,8 @@ COMMANDS
 	standard error.
 +
 A record verifies if it is well formed, names the commit it is
-attached to, uses only declared actors, uses the `UNKNOWN` mark only
-in records with `capture adopted`, and each of its ranges lies within
+attached to, uses only declared actors, lists no actors for the
+ranges it marks `UNKNOWN`, and each of its ranges lies within
 the file it names (in the commit for `+` ranges, in its first parent
 for `-` ranges) and matches its anchor.
 

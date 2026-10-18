@@ -1741,36 +1741,32 @@ static void determine_rewrite(struct commit *current_head,
 /*
  * Compute the records of the commit about to be made, with its first
  * parent among `parents`, carrying over those of the commits that `rw`
- * names.  Returns 1 if the commit gets records, and 0 if it rewrites
- * commits without any.  Dies if provenance.require is set and no
- * session is linked to a commit that does not pick or revert another.
+ * names.  Dies if provenance.require is set and no session is linked
+ * to a commit that does not pick or revert another.
  */
-static int compute_provenance(struct commit_list *parents,
-			      const char *author_ident,
-			      const struct provenance_rewrite *rw,
-			      struct provenance_record *lines,
-			      struct provenance_reasoning *reasoning)
+static void compute_provenance(struct commit_list *parents,
+			       const char *author_ident,
+			       const struct provenance_rewrite *rw,
+			       struct provenance_record *lines,
+			       struct provenance_reasoning *reasoning)
 {
 	int require = 0;
-	int ret;
 
-	ret = provenance_commit_records(the_repository,
-					parents ? parents->item : NULL,
-					&the_repository->index->cache_tree->oid,
-					author_ident, provenance_session, rw,
-					lines, reasoning);
-	if (ret < 0) {
+	if (provenance_commit_records(the_repository,
+				      parents ? parents->item : NULL,
+				      &the_repository->index->cache_tree->oid,
+				      author_ident, provenance_session, rw,
+				      lines, reasoning)) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
 	}
 
-	if (ret && !rw->pick && !reasoning->sessions_nr &&
+	if (!rw->pick && !reasoning->sessions_nr &&
 	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
 	    require) {
 		rollback_index_files();
 		die(_("no session is linked to this commit and provenance.require is set"));
 	}
-	return ret;
 }
 
 int cmd_commit(int argc,
@@ -1884,7 +1880,7 @@ int cmd_commit(int argc,
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
-	int record_provenance, have_provenance = 0;
+	int record_provenance;
 	int ret = 0;
 
 	show_usage_with_options_if_asked(argc, argv,
@@ -2030,9 +2026,8 @@ int cmd_commit(int argc,
 		struct provenance_rewrite rw = { 0 };
 
 		determine_rewrite(current_head, &rw);
-		have_provenance = compute_provenance(parents, author_ident.buf,
-						     &rw, &prov_lines,
-						     &prov_reasoning);
+		compute_provenance(parents, author_ident.buf, &rw,
+				   &prov_lines, &prov_reasoning);
 	}
 
 	if (amend) {
@@ -2056,7 +2051,7 @@ int cmd_commit(int argc,
 	if (!transaction ||
 	    queue_head_update_with_reflog(transaction, current_head, &oid,
 					  reflog_msg, &sb, &err) ||
-	    (have_provenance &&
+	    (record_provenance &&
 	     provenance_queue_records(the_repository, transaction, &oid,
 				      &prov_lines, &prov_reasoning,
 				      reflog_msg, &err)) ||
@@ -2105,7 +2100,7 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
-	if (have_provenance && !prov_reasoning.sessions_nr)
+	if (record_provenance && !prov_reasoning.sessions_nr)
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"
 				    "LLM session, provide its details with --session"));
