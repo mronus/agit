@@ -263,10 +263,6 @@ int queue_head_update_with_reflog(struct ref_transaction *transaction,
 				  const struct object_id *new_head,
 				  const char *action, const struct strbuf *msg,
 				  struct strbuf *err);
-int update_head_with_reflog(const struct commit *old_head,
-			    const struct object_id *new_head,
-			    const char *action, const struct strbuf *msg,
-			    struct strbuf *err);
 void commit_post_rewrite(struct repository *r,
 			 const struct commit *current_head,
 			 const struct object_id *new_head);
