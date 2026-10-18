@@ -304,7 +304,7 @@ test_expect_success 'combined diffs get no column; other parents show ?' '
 	test_cmp expect actual &&
 	git show --first-parent --provenance HEAD >actual &&
 	patch_body actual >actual.body &&
-	test_grep "^H+one$" actual.body &&
+	test_grep "^?+one$" actual.body &&
 	git show -m --provenance HEAD >actual &&
 	sed -n -e "/^commit .*(from $(git rev-parse HEAD^2))/,\$p" actual >actual.second &&
 	patch_body actual.second >actual.body &&

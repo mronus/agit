@@ -181,7 +181,7 @@ void provenance_diff_set_live(struct diff_options *opt,
 
 	if (provenance_journal_read(r, &pd->journal))
 		return;
-	pd->live = provenance_attribution_new(r, &base, &pd->journal);
+	pd->live = provenance_attribution_new(r, &base, NULL, &pd->journal);
 	pd->source = source;
 }
 

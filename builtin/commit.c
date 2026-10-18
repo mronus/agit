@@ -1767,8 +1767,7 @@ static void compute_provenance(struct commit_list *parents,
 {
 	int require = 0;
 
-	if (provenance_commit_records(the_repository,
-				      parents ? parents->item : NULL,
+	if (provenance_commit_records(the_repository, parents,
 				      &the_repository->index->cache_tree->oid,
 				      author_ident, provenance_session, rw,
 				      lines, reasoning)) {

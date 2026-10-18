@@ -12,6 +12,7 @@
 #include "hex.h"
 #include "object-file.h"
 #include "odb.h"
+#include "oidset.h"
 #include "provenance.h"
 #include "provenance-journal.h"
 #include "quote.h"
@@ -35,10 +36,12 @@
  * are the sessions of the journal, in the order in which they appear
  * in it, followed by the AI actors that only the line records of the
  * sources of a rewrite declare, actor sessions_nr is the human making
- * the commit, and actor sessions_nr + 1 stands for an unknown origin,
- * such as that of the lines a rewrite takes from a commit without a
- * line record.  Sets are interned, so that two lines have the same
- * owners exactly if they have the same set index.
+ * the commit, actor sessions_nr + 1 stands for an unknown origin, such
+ * as that of the lines a rewrite takes from a commit without a line
+ * record, and actor sessions_nr + 2 for the other parents of a merge,
+ * which are not actors: they never appear in the record.  Sets are
+ * interned, so that two lines have the same owners exactly if they
+ * have the same set index.
  */
 struct owner_set {
 	int *actors;
@@ -89,9 +92,11 @@ struct interval {
 	struct strmap changes;
 };
 
-/* A source of a rewrite. */
+/* A source of a rewrite, or another parent of a merge. */
 struct seed {
+	/* NULL for another parent */
 	const struct provenance_source *src;
+	struct commit *commit;
 	/* the trees of the source and of its first parent */
 	const struct object_id *post_tree;
 	const struct object_id *pre_tree;
@@ -101,6 +106,12 @@ struct seed {
 	struct strmap changes;
 	/* a line of the commit takes its owners from the source */
 	unsigned contributed : 1;
+	/*
+	 * Another parent of a merge: its pre-image is the first parent,
+	 * and the lines that differ belong to the pseudo-actor `other` of
+	 * struct attribution.
+	 */
+	unsigned other : 1;
 };
 
 /* The line record of a commit that a blame finds, imported once. */
@@ -130,8 +141,11 @@ struct attribution {
 	struct repository *r;
 	const struct provenance_journal *journal;
 
+	/* the sources, then the other parents of a merge */
 	struct seed *seeds;
-	size_t seeds_nr;
+	size_t sources_nr, seeds_nr;
+	/* the non-empty blobs that the other parents change paths to */
+	struct oidset other_blobs;
 	/* PROVENANCE_REWRITE_* */
 	unsigned flags;
 
@@ -147,8 +161,11 @@ struct attribution {
 
 	struct session_info *sessions;
 	size_t sessions_nr, sessions_alloc;
-	/* the actor indices of the human and of an unknown origin */
-	int human, unknown;
+	/*
+	 * The actor indices of the human, of an unknown origin and of the
+	 * other parents of a merge.
+	 */
+	int human, unknown, other;
 	/* the actor index of the lines that nobody is known to own */
 	int fallback;
 
@@ -576,9 +593,12 @@ static void step_unchanged(struct step *st, long until_a)
 static int is_unknown(struct attribution *a, int set)
 {
 	const struct owner_set *s = &a->sets[set];
+	size_t last = s->nr - 1;
 
-	/* the unknown origin has the highest index */
-	return s->actors[s->nr - 1] == a->unknown;
+	/* only the other parents have a higher index */
+	if (last && s->actors[last] == a->other)
+		last--;
+	return s->actors[last] == a->unknown;
 }
 
 /*
@@ -849,13 +869,14 @@ static int unknown_hunk(long start_a, long count_a,
 /*
  * As seed_lines() for both versions of a path, `old` and `new`, of a
  * source without a line record: the lines that differ between them are
- * of unknown origin.  Leaves `old_sets` and `new_sets` alone if the
- * versions cannot be compared.
+ * owned by `actor`, the unknown origin or the other parents of a merge.
+ * Leaves `old_sets` and `new_sets` alone if the versions cannot be
+ * compared.
  */
 static void unknown_lines(struct attribution *a, mmfile_t *old, mmfile_t *new,
-			  int **old_sets, int **new_sets)
+			  int actor, int **old_sets, int **new_sets)
 {
-	struct unknown_lines u = { .set = singleton(a, a->unknown) };
+	struct unknown_lines u = { .set = singleton(a, actor) };
 	size_t old_nr = count_lines(old), new_nr = count_lines(new);
 
 	ALLOC_ARRAY(u.old_sets, old_nr);
@@ -903,7 +924,7 @@ static void restore_owners(struct attribution *a, const char *path,
 /* Whether the changes of `seed` include some to `path`. */
 static int seed_has_path(struct seed *seed, const char *path)
 {
-	if (seed->src->lines)
+	if (seed->src && seed->src->lines)
 		return !!provenance_record_file(seed->src->lines, path);
 	return strmap_contains(&seed->changes, path);
 }
@@ -1043,13 +1064,15 @@ static int merge_owners(struct attribution *a, struct found_owners *fo,
 /*
  * Move the file, whose version in the first parent is `base`, to
  * `found`, whose blob id is `found_oid`, through the changes to `path`
- * of the sources `begin` to `end` - 1, which are all found in `found`.
- * The changes of a source are those from the pre-image of its record
- * to the post-image, or the reverse for a revert.  The lines and the
- * deletions that the record covers get its owners, and those that a
- * source without a record changes are of unknown origin; a line that
- * replaces one of those gains the fallback owner, who also owns the
- * lines that no source knows.  For a revert, the lines that the source
+ * of the sources `begin` to `end` - 1 and then of the other parents of
+ * a merge, which are all found in `found`.  The changes of a source are
+ * those from the pre-image of its record to the post-image, or the
+ * reverse for a revert.  The lines and the deletions that the record
+ * covers get its owners, those that a source without a record changes
+ * are of unknown origin, and those in which another parent differs
+ * from the first are the other parents'; a line that replaces one of
+ * those gains the fallback owner, who also owns the lines that no
+ * source knows.  For a revert, the lines that the source
  * deleted, which the revert restores, get the owners that a blame
  * finds instead (see restore_owners()).  Takes ownership of `found`.
  */
@@ -1060,13 +1083,17 @@ static int step_found(struct attribution *a, const char *path,
 {
 	int revert = !!(a->flags & PROVENANCE_REWRITE_REVERT);
 	int fallback = singleton(a, a->fallback);
+	size_t others = a->seeds_nr - a->sources_nr;
 	struct found_owners owners, deleters;
 	int ret = 0;
 
 	found_owners_init(&owners, count_lines(&found));
 	found_owners_init(&deleters, count_lines(base));
-	for (size_t i = begin; !ret && i < end; i++) {
+	for (size_t k = begin; !ret && k < end + others; k++) {
+		/* the other parents come after the sources */
+		size_t i = k < end ? k : a->sources_nr + (k - end);
 		struct seed *seed = &a->seeds[i];
+		int reversed = revert && !seed->other;
 		const struct object_id *new_tree, *old_tree;
 		mmfile_t new = { 0 }, old = { 0 };
 		struct object_id new_oid, old_oid;
@@ -1074,15 +1101,18 @@ static int step_found(struct attribution *a, const char *path,
 
 		if (!seed_has_path(seed, path))
 			continue;
-		new_tree = revert ? seed->pre_tree : seed->post_tree;
-		old_tree = revert ? seed->post_tree : seed->pre_tree;
+		new_tree = reversed ? seed->pre_tree : seed->post_tree;
+		old_tree = reversed ? seed->post_tree : seed->pre_tree;
 		if (read_path(a, new_tree, path, &new_oid, &new) ||
 		    read_path(a, old_tree, path, &old_oid, &old)) {
 			ret = -1;
 		} else {
-			if (revert) {
+			if (seed->other) {
+				unknown_lines(a, &old, &new, a->other,
+					      &old_sets, &new_sets);
+			} else if (reversed) {
 				/* first, the lines of `new` the source deleted */
-				unknown_lines(a, &old, &new,
+				unknown_lines(a, &old, &new, a->unknown,
 					      &old_sets, &new_sets);
 				if (new_sets)
 					restore_owners(a, path, new_sets,
@@ -1098,14 +1128,14 @@ static int step_found(struct attribution *a, const char *path,
 				old_sets = seed_lines(a, seed, path,
 						      '-', &old);
 			} else {
-				unknown_lines(a, &old, &new,
+				unknown_lines(a, &old, &new, a->unknown,
 					      &old_sets, &new_sets);
 			}
 			if (!new_sets || !old_sets ||
 			    merge_owners(a, &owners, i, &new, new_sets, &found) ||
 			    merge_owners(a, &deleters, i, &old, old_sets, base))
 				ret = error(_("unable to diff '%s' with its version in %s"),
-					    path, oid_to_hex(&seed->src->commit->object.oid));
+					    path, oid_to_hex(&seed->commit->object.oid));
 		}
 		free(new.ptr);
 		free(old.ptr);
@@ -1134,12 +1164,13 @@ static int step_found(struct attribution *a, const char *path,
 /*
  * Move the file, which is at its version in the first parent, through
  * the changes of each source of a rewrite whose line record has a
- * block for it, or, for a source without a line record, that changes
- * it (see step_found()).  The changes of the commit being amended, if
- * it is a version the commit was made from, are found in its own
- * post-image; those of all other sources together in `next`, the next
- * version of the chain, or if it is NULL in `two`, whose blob id is
- * `post`.
+ * block for it, or, for a source without a line record or another
+ * parent of a merge, that changes it (see step_found()).  The changes
+ * of the commit being amended, if it is a version the commit was made
+ * from, are found in its own post-image; those of all other sources
+ * together in `next`, the next version of the chain, or if it is NULL
+ * in `two`, whose blob id is `post`.  The changes of the other parents
+ * are found in both.
  */
 static int seed_file(struct attribution *a, const char *path,
 		     struct file_state *fs, const struct object_id *next,
@@ -1153,7 +1184,7 @@ static int seed_file(struct attribution *a, const char *path,
 	if (read_blob(a, &fs->oid, &base))
 		return -1;
 
-	if ((a->flags & PROVENANCE_REWRITE_AMEND) && a->seeds_nr > 1) {
+	if ((a->flags & PROVENANCE_REWRITE_AMEND) && a->sources_nr > 1) {
 		struct seed *seed = &a->seeds[0];
 
 		begin = 1;
@@ -1177,11 +1208,83 @@ static int seed_file(struct attribution *a, const char *path,
 			oidcpy(&found_oid, post);
 		}
 		if (!ret)
-			ret = step_found(a, path, fs, &base, begin, a->seeds_nr,
-					 found, &found_oid);
+			ret = step_found(a, path, fs, &base, begin,
+					 a->sources_nr, found, &found_oid);
 		break;
 	}
 	free(base.ptr);
+	return ret;
+}
+
+/* The set `set` without the other parents, or BASELINE if that is empty. */
+static int drop_other(struct attribution *a, int set)
+{
+	const struct owner_set *s;
+
+	if (set < 0)
+		return set;
+	s = &a->sets[set];
+	if (s->actors[s->nr - 1] != a->other)
+		return set;
+	if (s->nr == 1)
+		return BASELINE;
+	return find_set(a, s->actors, s->nr - 1);
+}
+
+/*
+ * Leave out of the record of a merge what came from its other parents:
+ * the lines of the file, which is at its version in the commit, that
+ * the version of another parent has as they are, and the lines of its
+ * version in the first parent, `base`, that the commit deletes and
+ * another parent lacks.  The other lines keep their owners, without
+ * the other parents.
+ */
+static int drop_others(struct attribution *a, const char *path,
+		       struct file_state *fs, const struct object_id *base)
+{
+	mmfile_t pre;
+	int ret = 0;
+
+	if (a->sources_nr == a->seeds_nr)
+		return 0;
+	if (read_blob(a, base, &pre))
+		return -1;
+	for (size_t i = a->sources_nr; !ret && i < a->seeds_nr; i++) {
+		struct seed *seed = &a->seeds[i];
+		struct object_id oid;
+		mmfile_t theirs;
+		int *lacked = NULL, *added = NULL, *changed = NULL, *ours = NULL;
+
+		if (!seed_has_path(seed, path))
+			continue;
+		if (read_path(a, seed->post_tree, path, &oid, &theirs)) {
+			ret = -1;
+			break;
+		}
+		unknown_lines(a, &pre, &theirs, a->other, &lacked, &added);
+		unknown_lines(a, &theirs, &fs->content, a->other,
+			      &changed, &ours);
+		if (!lacked || !ours)
+			ret = error(_("unable to diff '%s' with its version in %s"),
+				    path, oid_to_hex(&seed->commit->object.oid));
+		for (size_t j = 0; !ret && j < fs->base_nr; j++)
+			if (lacked[j] >= 0)
+				fs->deleted[j] = -1;
+		for (size_t j = 0; !ret && j < fs->nr; j++)
+			if (ours[j] < 0)
+				fs->owners[j].set = BASELINE;
+		free(theirs.ptr);
+		free(lacked);
+		free(added);
+		free(changed);
+		free(ours);
+	}
+	free(pre.ptr);
+
+	for (size_t j = 0; j < fs->nr; j++)
+		fs->owners[j].set = drop_other(a, fs->owners[j].set);
+	for (size_t j = 0; j < fs->base_nr; j++)
+		fs->deleted[j] = drop_other(a, fs->deleted[j]);
 	return ret;
 }
 
@@ -1338,6 +1441,36 @@ static int add_file(struct attribution *a, const char *path,
 		free(content.ptr);
 		break;
 	}
+
+	/* a merge took all its changes to the file from other parents */
+	if (!file->ranges_nr) {
+		free(file->path);
+		rec->files_nr--;
+	}
+	return 0;
+}
+
+/*
+ * Whether a merge takes `path`, whose version in the first parent is
+ * `pre` and in the commit `post`, as another parent has it, or, if the
+ * first parent does not have it, as another parent has some path, as
+ * after a directory rename: all its lines then come from that parent,
+ * and so do its deletions, and it gets no block.  This saves reading
+ * the blobs, which a partial clone may not have.
+ */
+static int taken_from_other(struct attribution *a, const char *path,
+			    const struct object_id *pre,
+			    const struct object_id *post)
+{
+	if (is_empty_blob_oid(pre, a->r->hash_algo) &&
+	    oidset_contains(&a->other_blobs, post))
+		return 1;
+	for (size_t i = a->sources_nr; i < a->seeds_nr; i++) {
+		const struct change *c = strmap_get(&a->seeds[i].changes, path);
+
+		if (c && oideq(&c->post, post))
+			return 1;
+	}
 	return 0;
 }
 
@@ -1366,7 +1499,7 @@ static int attribute_file(struct attribution *a, const char *path,
 		return 0;
 	side_oid(a, one, &pre);
 	side_oid(a, two, &post);
-	if (oideq(&pre, &post) ||
+	if (oideq(&pre, &post) || taken_from_other(a, path, &pre, &post) ||
 	    (DIFF_FILE_VALID(one) && diff_filespec_is_binary(a->r, one)) ||
 	    (DIFF_FILE_VALID(two) && diff_filespec_is_binary(a->r, two)))
 		goto out;
@@ -1445,6 +1578,9 @@ static int attribute_file(struct attribution *a, const char *path,
 			goto out;
 	}
 
+	ret = drop_others(a, path, &fs, &pre);
+	if (ret)
+		goto out;
 	apply_claims(a, path, &fs);
 	ret = add_file(a, path, &pre, &post, &fs, rec);
 
@@ -1728,10 +1864,16 @@ static void blame_restored(struct attribution *a, const struct seed *seed)
 	strmap_clear(&changes, 1);
 }
 
+/*
+ * Add the sources, and then the other parents of a merge, `others`, to
+ * the seeds; `base` is the tree of the first parent.
+ */
 static int add_seeds(struct attribution *a,
-		     const struct provenance_source *sources, size_t nr)
+		     const struct provenance_source *sources, size_t nr,
+		     const struct commit_list *others,
+		     const struct object_id *base)
 {
-	CALLOC_ARRAY(a->seeds, nr);
+	CALLOC_ARRAY(a->seeds, st_add(nr, commit_list_count(others)));
 	for (size_t i = 0; i < nr; i++) {
 		struct seed *seed = &a->seeds[a->seeds_nr];
 		struct commit *c = sources[i].commit;
@@ -1740,6 +1882,7 @@ static int add_seeds(struct attribution *a,
 			return error(_("could not parse commit %s"),
 				     oid_to_hex(&c->object.oid));
 		seed->src = &sources[i];
+		seed->commit = c;
 		seed->post_tree = get_commit_tree_oid(c);
 		seed->pre_tree = a->r->hash_algo->empty_tree;
 		if (c->parents) {
@@ -1758,11 +1901,38 @@ static int add_seeds(struct attribution *a,
 			seed->actors = import_actors(a, seed->src->lines);
 		a->seeds_nr++;
 	}
+	a->sources_nr = a->seeds_nr;
+
+	for (; others; others = others->next) {
+		struct seed *seed = &a->seeds[a->seeds_nr];
+		struct commit *c = others->item;
+		struct hashmap_iter iter;
+		struct strmap_entry *e;
+
+		if (repo_parse_commit(a->r, c))
+			return error(_("could not parse commit %s"),
+				     oid_to_hex(&c->object.oid));
+		seed->commit = c;
+		seed->other = 1;
+		seed->post_tree = get_commit_tree_oid(c);
+		seed->pre_tree = base;
+		strmap_init(&seed->changes);
+		collect_changes(a, seed->pre_tree, seed->post_tree,
+				&seed->changes);
+		strmap_for_each_entry(&seed->changes, &iter, e) {
+			const struct change *ch = e->value;
+
+			if (!is_empty_blob_oid(&ch->post, a->r->hash_algo))
+				oidset_insert(&a->other_blobs, &ch->post);
+		}
+		a->seeds_nr++;
+	}
 	return 0;
 }
 
 static int attribution_init(struct attribution *a, struct repository *r,
 			    const struct object_id *base,
+			    const struct commit_list *others,
 			    const struct provenance_journal *journal,
 			    const char *session,
 			    const struct provenance_source *sources,
@@ -1779,14 +1949,15 @@ static int attribution_init(struct attribution *a, struct repository *r,
 	strmap_init(&a->restored);
 	CALLOC_ARRAY(a->warned, journal->nr);
 	collect_sessions(a, session);
-	ret = add_seeds(a, sources, nr);
+	ret = add_seeds(a, sources, nr, others, base);
 	/* the blame may declare actors, which come before the human */
 	if (!ret && (flags & PROVENANCE_REWRITE_REVERT))
 		blame_restored(a, &a->seeds[0]);
 	a->human = a->sessions_nr;
 	a->unknown = a->human + 1;
+	a->other = a->unknown + 1;
 	a->fallback = (flags & PROVENANCE_REWRITE_ADOPT) ? a->unknown : a->human;
-	CALLOC_ARRAY(a->rank, a->unknown + 1);
+	CALLOC_ARRAY(a->rank, a->other + 1);
 	if (!ret)
 		collect_intervals(a, base);
 	return ret;
@@ -1807,6 +1978,7 @@ static void attribution_release(struct attribution *a)
 		strmap_clear(&a->seeds[i].changes, 1);
 	}
 	free(a->seeds);
+	oidset_clear(&a->other_blobs);
 	for (size_t i = 0; i < a->sessions_nr; i++) {
 		string_list_clear(&a->sessions[i].claims, 0);
 		free(a->sessions[i].actor_id);
@@ -1827,13 +1999,18 @@ static void attribution_release(struct attribution *a)
 
 struct provenance_attribution *
 provenance_attribution_new(struct repository *r, const struct object_id *base,
+			   const struct commit_list *others,
 			   const struct provenance_journal *journal)
 {
 	struct provenance_attribution *pa;
 
 	CALLOC_ARRAY(pa, 1);
 	oidcpy(&pa->base, base);
-	attribution_init(&pa->a, r, &pa->base, journal, NULL, NULL, 0, 0);
+	if (attribution_init(&pa->a, r, &pa->base, others, journal, NULL,
+			     NULL, 0, 0)) {
+		provenance_attribution_free(pa);
+		return NULL;
+	}
 	return pa;
 }
 
@@ -1902,7 +2079,7 @@ static void copy_reasoning(const struct provenance_reasoning *from,
 }
 
 int provenance_attribute(struct repository *r,
-			 struct commit *parent,
+			 const struct commit_list *parents,
 			 const struct object_id *tree,
 			 const struct provenance_journal *journal,
 			 const char *session,
@@ -1910,13 +2087,13 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_record *lines,
 			 struct provenance_reasoning *reasoning)
 {
-	return provenance_attribute_rewrite(r, parent, tree, NULL, 0, 0,
+	return provenance_attribute_rewrite(r, parents, tree, NULL, 0, 0,
 					    journal, session, human,
 					    lines, reasoning);
 }
 
 int provenance_attribute_rewrite(struct repository *r,
-				 struct commit *parent,
+				 const struct commit_list *parents,
 				 const struct object_id *tree,
 				 const struct provenance_source *sources,
 				 size_t nr, unsigned flags,
@@ -1937,15 +2114,17 @@ int provenance_attribute_rewrite(struct repository *r,
 		BUG("provenance: an amend without a source");
 	if ((flags & PROVENANCE_REWRITE_ADOPT) && journal->nr)
 		BUG("provenance: adopting with a journal");
-	if (parent) {
+	if (parents) {
+		struct commit *parent = parents->item;
+
 		if (repo_parse_commit(r, parent))
 			return error(_("could not parse commit %s"),
 				     oid_to_hex(&parent->object.oid));
 		base = get_commit_tree_oid(parent);
 	}
 
-	if (attribution_init(&a, r, base, journal, session,
-			     sources, nr, flags)) {
+	if (attribution_init(&a, r, base, parents ? parents->next : NULL,
+			     journal, session, sources, nr, flags)) {
 		attribution_release(&a);
 		return -1;
 	}

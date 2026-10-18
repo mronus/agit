@@ -295,8 +295,7 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 
 	human = author_of(r, commit);
 	if (!human ||
-	    provenance_attribute_rewrite(r, commit->parents ?
-					 commit->parents->item : NULL,
+	    provenance_attribute_rewrite(r, commit->parents,
 					 get_commit_tree_oid(commit),
 					 sources, nr, PROVENANCE_REWRITE_ADOPT,
 					 &journal, NULL, human,
