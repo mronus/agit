@@ -11,7 +11,8 @@ provenance.enabled::
 	make.  If false, none of these commands records provenance or
 	reads the journal of stamps, and linkgit:git-fetch[1],
 	linkgit:git-push[1] and linkgit:git-clone[1] do not transfer
-	the provenance refs.  Defaults to true.
+	the provenance refs.  Transfer can be turned off for a single
+	remote with `remote.<name>.provenance`.  Defaults to true.
 
 provenance.reasoning.fetch::
 	Whether fetching from a remote, including with

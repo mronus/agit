@@ -453,4 +453,68 @@ test_expect_success 'shallow clone gets and merges records' '
 	test_cmp expect actual
 '
 
+test_expect_success 'remote.<name>.provenance=false: fetch takes nothing' '
+	git clone remote.git optout &&
+	git -C optout config set remote.origin.provenance false &&
+	git -C optout for-each-ref refs/provenance/ >expect &&
+	commit_in a optout-a &&
+	git -C a push &&
+	git -C optout fetch 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout pull -q 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout remote update 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote.<name>.provenance=false: explicit fetch refspecs' '
+	git -C optout rev-parse refs/provenance/lines >expect.local &&
+	git -C optout fetch origin \
+		refs/provenance/lines:refs/provenance/remotes/origin/lines &&
+	git -C remote.git rev-parse refs/provenance/lines >expect &&
+	git -C optout rev-parse refs/provenance/remotes/origin/lines >actual &&
+	test_cmp expect actual &&
+	git -C optout rev-parse refs/provenance/lines >actual &&
+	test_cmp expect.local actual
+'
+
+test_expect_success 'remote.<name>.provenance=false: push sends nothing' '
+	commit_in optout optout-push &&
+	git -C remote.git for-each-ref refs/provenance/ >expect &&
+	git -C optout push 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C remote.git for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual &&
+	git -C optout push origin \
+		refs/provenance/lines:refs/provenance/optout 2>err &&
+	test_grep "refs/provenance/lines -> refs/provenance/optout" err &&
+	git -C optout rev-parse refs/provenance/lines >expect &&
+	git -C remote.git rev-parse refs/provenance/optout >actual &&
+	test_cmp expect actual &&
+	git -C remote.git update-ref -d refs/provenance/optout
+'
+
+test_expect_success 'remote.<name>.provenance=false: clone takes nothing' '
+	git clone -c remote.origin.provenance=false remote.git optout-clone &&
+	provenance_refs optout-clone >actual &&
+	test_must_be_empty actual &&
+	test_cmp_config -C optout-clone false remote.origin.provenance &&
+	git -C optout-clone fetch &&
+	provenance_refs optout-clone >actual &&
+	test_must_be_empty actual
+'
+
+test_expect_success 'push to refs/for/<branch> does not push provenance' '
+	git init --bare -b main review.git &&
+	git -C optout remote add review ../review.git &&
+	git -C optout push review HEAD:refs/for/main 2>err &&
+	test_grep ! refs/provenance err &&
+	provenance_refs review.git >actual &&
+	test_must_be_empty actual &&
+	git -C optout push review HEAD:main 2>err &&
+	test_grep "refs/provenance/lines -> refs/provenance/lines" err
+'
+
 test_done

@@ -57,6 +57,28 @@ static int reasoning_wanted(struct repository *r, const char *key)
 	die(_("invalid value for '%s': '%s'"), key, value);
 }
 
+/* Return whether "remote.<name>.provenance" of `remote_name` is false. */
+static int opted_out(struct repository *r, const char *remote_name)
+{
+	char *key = xstrfmt("remote.%s.provenance", remote_name);
+	int enabled = 1;
+
+	repo_config_get_bool(r, key, &enabled);
+	free(key);
+	return !enabled;
+}
+
+/*
+ * Return whether the provenance refs are transferred to and from
+ * `remote`: provenance is enabled in `r`, `remote` is a configured
+ * remote and it has not opted out.
+ */
+static int remote_transfers(struct repository *r, struct remote *remote)
+{
+	return remote_is_configured(remote, 0) && provenance_enabled(r) &&
+	       !opted_out(r, remote->name);
+}
+
 /* Return whether `rs` maps the remote ref `name` to a local ref. */
 static int refspec_maps(struct refspec *rs, const char *name)
 {
@@ -73,7 +95,7 @@ static int refspec_maps(struct refspec *rs, const char *name)
 void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
 			       struct refspec *cmdline, struct refspec *out)
 {
-	if (!remote_is_configured(remote, 0) || !provenance_enabled(r))
+	if (!remote_transfers(r, remote))
 		return;
 
 	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
@@ -290,6 +312,9 @@ int provenance_merge_fetched(struct repository *r, const char *remote_name,
 {
 	int ret = 0;
 
+	if (opted_out(r, remote_name))
+		return 0;
+
 	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
 		struct strbuf tracking = STRBUF_INIT;
 
@@ -303,16 +328,36 @@ int provenance_merge_fetched(struct repository *r, const char *remote_name,
 	return ret;
 }
 
-/*
- * Return whether the refspec item `item` of a push updates a branch:
- * it is the "matching" refspec, a pattern over branches, or names a
- * local branch (directly, or through HEAD) or a remote branch.
- */
-static int pushes_branch(struct repository *r, const struct refspec_item *item)
+/* Return whether the local ref `name`, as a push names it, is a branch. */
+static int names_branch(struct repository *r, const char *name)
 {
 	struct object_id oid;
 	char *full = NULL;
 	int ret;
+
+	if (!strcmp(name, "HEAD")) {
+		const char *head = refs_resolve_ref_unsafe(get_main_ref_store(r),
+							   "HEAD", 0, NULL,
+							   NULL);
+		return head && starts_with(head, "refs/heads/");
+	}
+	ret = repo_dwim_ref(r, name, strlen(name), &oid, &full, 0) == 1 &&
+	      starts_with(full, "refs/heads/");
+	free(full);
+	return ret;
+}
+
+/*
+ * Return whether the refspec item `item` of a push updates a branch
+ * of the remote, a ref under refs/heads/: it is the "matching"
+ * refspec, or its destination is a branch.  A destination that is
+ * not a full ref name, or a missing one, is a branch if the source is
+ * a local branch, as the push resolves it when the remote does not
+ * have a ref of that name.
+ */
+static int pushes_branch(struct repository *r, const struct refspec_item *item)
+{
+	const char *dst;
 
 	if (item->negative)
 		return 0;
@@ -320,17 +365,12 @@ static int pushes_branch(struct repository *r, const struct refspec_item *item)
 		return 1;
 	if (!item->src || !*item->src)
 		return 0; /* a deletion */
-	if (item->dst && starts_with(item->dst, "refs/heads/"))
-		return 1;
-	if (item->pattern)
-		return starts_with(item->src, "refs/heads/");
-	if (item->exact_sha1)
+	dst = item->dst && *item->dst ? item->dst : item->src;
+	if (starts_with(dst, "refs/"))
+		return starts_with(dst, "refs/heads/");
+	if (item->pattern || item->exact_sha1)
 		return 0;
-	ret = repo_dwim_ref(r, item->src, strlen(item->src), &oid,
-			    &full, 0) == 1 &&
-	      starts_with(full, "refs/heads/");
-	free(full);
-	return ret;
+	return names_branch(r, item->src);
 }
 
 /* Return whether `rs` names the ref `name` on either side. */
@@ -353,7 +393,7 @@ void provenance_push_refspecs(struct repository *r, struct remote *remote,
 	int branch = 0;
 
 	if (flags & (TRANSPORT_PUSH_MIRROR | TRANSPORT_PUSH_PRUNE) ||
-	    !remote_is_configured(remote, 0) || !provenance_enabled(r))
+	    !remote_transfers(r, remote))
 		return;
 
 	if (flags & TRANSPORT_PUSH_ALL)

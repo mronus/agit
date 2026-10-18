@@ -87,6 +87,17 @@ remote.<name>.pruneTags::
 See also `remote.<name>.prune` and the PRUNING section of
 linkgit:git-fetch[1].
 
+remote.<name>.provenance::
+	When set to false, the provenance refs are not transferred to
+	or from remote <name>: linkgit:git-fetch[1],
+	linkgit:git-pull[1], linkgit:git-clone[1] and `git remote
+	update` do not fetch or merge them, linkgit:git-push[1] does not
+	push them, and `git remote prune` leaves their tracking refs
+	alone.  Refspecs that name `refs/provenance/*` explicitly are
+	used as given.  Has no effect if `provenance.enabled` is false.
+	Defaults to true.  See the PROVENANCE section of
+	linkgit:git-fetch[1] and linkgit:git-push[1].
+
 remote.<name>.promisor::
 	When set to true, this remote will be used to fetch promisor
 	objects.

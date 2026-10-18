@@ -397,6 +397,8 @@ local `refs/provenance/lines` and `refs/provenance/reasoning` from
 them, as linkgit:git-fetch[1] does (see its PROVENANCE section); no
 refspec is written to the configuration for them.  With `--mirror`,
 the provenance refs are copied as they are, like every other ref.
+With `-c remote.<name>.provenance=false`, they are not fetched, and
+the setting stays in the configuration of the new repository.
 
 EXAMPLES
 --------

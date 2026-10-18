@@ -18,8 +18,9 @@ struct repository;
 
 /*
  * Append to `out` the refspecs that fetch the provenance refs of
- * `remote` into its tracking refs, if provenance is enabled in `r`
- * and `remote` is a configured remote.  The reasoning ref is fetched
+ * `remote` into its tracking refs, if provenance is enabled in `r`,
+ * `remote` is a configured remote and "remote.<name>.provenance" is
+ * not false.  The reasoning ref is fetched
  * only if "provenance.reasoning.fetch" is "always".  A provenance ref
  * that is already mapped by `cmdline` (the refspecs given on the
  * command line, if any) or by the configured refspecs of `remote`,
@@ -36,8 +37,9 @@ void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
  * fast-forward it, or make a merge commit whose tree is the union of
  * both sides, keeping the local record (with a warning) for a commit
  * that both sides changed.  With `verbose` > 0, report each merged
- * ref on stderr.  Returns 0 on success and -1, after reporting an
- * error, if a ref could not be merged.
+ * ref on stderr.  Nothing is merged if "remote.<name>.provenance" of
+ * `remote_name` is false.  Returns 0 on success and -1, after
+ * reporting an error, if a ref could not be merged.
  */
 int provenance_merge_fetched(struct repository *r, const char *remote_name,
 			     const struct ref *ref_map, int verbose);
@@ -46,9 +48,10 @@ int provenance_merge_fetched(struct repository *r, const char *remote_name,
  * Append to `out` the refspecs that push the local provenance refs
  * along with the refs that `rs` and the transport flags `flags` push
  * to `remote`.  They are added only if provenance is enabled, `remote`
- * is a configured remote, the push updates at least one branch and is
- * neither a mirror nor a pruning push, and the local provenance ref
- * exists.  The reasoning ref is pushed only if
+ * is a configured remote whose "remote.<name>.provenance" is not
+ * false, the push updates at least one ref under refs/heads/ on the
+ * remote and is neither a mirror nor a pruning push, and the local
+ * provenance ref exists.  The reasoning ref is pushed only if
  * "provenance.reasoning.push" is "always".  A provenance ref that `rs`
  * already names is left out.
  */

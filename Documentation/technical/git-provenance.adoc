@@ -708,7 +708,13 @@ to the refspecs it uses, whether they come from the configuration or
 from the command line, and `clone` adds them to its initial fetch.
 Nothing is written to `remote.<name>.fetch`, so existing clones need
 no conversion and `provenance.enabled=false` turns transfer off
-entirely. A remote without provenance refs is not an error; the refs
+entirely. `remote.<name>.provenance=false` turns it off for one
+remote: `fetch`, `pull`, `clone`, `remote update` and `push` add
+nothing for it, so its provenance refs are neither fetched, merged nor
+pushed, while refspecs that name them explicitly are used as given.
+Both checks live in the functions that make the implicit refspecs, so
+every caller inherits them. A remote without provenance refs is not
+an error; the refs
 are not written to `FETCH_HEAD`; `--prune` prunes their tracking refs.
 Nothing is added for a URL, for `--prefetch`, or for a provenance ref
 that the refspecs already map, which covers the `+refs/*:refs/*` of
@@ -744,7 +750,11 @@ standard output.
 `push` to a configured remote pushes the local provenance refs in the
 same push as the branches, when it pushes at least one branch and the
 local refs exist: not for a URL, `--mirror` (which pushes them
-anyway), `--delete`, `--prune` or `--tags` alone. They are forced only
+anyway), `--delete`, `--prune` or `--tags` alone. A branch is a ref
+under `refs/heads/` on the remote: a push to `refs/for/<branch>` of a
+review system, or to any other namespace, adds nothing. A destination
+that is not a full ref name counts as a branch when the source is a
+local branch, as `push` resolves it. They are forced only
 with `--force`. If the remote rejects a provenance ref because it
 moved, `push` runs `git fetch` for the rejected refs, which merges
 them as above, and pushes the provenance refs once more; if that is
