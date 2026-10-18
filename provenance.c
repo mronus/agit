@@ -646,6 +646,80 @@ int provenance_read_reasoning(struct repository *r,
 	return read_record(r, PROVENANCE_REASONING_REF, commit, out);
 }
 
+struct cached_record {
+	struct oidmap_entry entry;
+	/* the record is valid */
+	int found;
+	struct provenance_record rec;
+};
+
+void provenance_cache_init(struct provenance_cache *cache,
+			   struct repository *r)
+{
+	cache->r = r;
+	oidmap_init(&cache->records, 0);
+	cache->have_ref = -1;
+}
+
+static void free_cached_record(void *p)
+{
+	struct cached_record *c = p;
+
+	provenance_record_release(&c->rec);
+	free(c);
+}
+
+void provenance_cache_release(struct provenance_cache *cache)
+{
+	oidmap_clear_with_free(&cache->records, free_cached_record);
+	cache->have_ref = -1;
+}
+
+static void load_record(struct provenance_cache *cache,
+			struct cached_record *c)
+{
+	const struct object_id *commit = &c->entry.oid;
+	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
+
+	if (provenance_read_lines(cache->r, commit, &buf) > 0) {
+		if (provenance_record_parse(buf.buf, buf.len,
+					    cache->r->hash_algo, &c->rec, &err))
+			warning(_("ignoring malformed provenance record of %s: %s"),
+				oid_to_hex(commit), err.buf);
+		else if (!oideq(&c->rec.commit, commit))
+			warning(_("ignoring provenance record of %s: it names commit %s"),
+				oid_to_hex(commit), oid_to_hex(&c->rec.commit));
+		else
+			c->found = 1;
+	}
+	if (!c->found)
+		provenance_record_release(&c->rec);
+	strbuf_release(&buf);
+	strbuf_release(&err);
+}
+
+const struct provenance_record *
+provenance_cache_get(struct provenance_cache *cache,
+		     const struct object_id *commit)
+{
+	struct cached_record *c;
+
+	if (cache->have_ref < 0)
+		cache->have_ref = refs_ref_exists(get_main_ref_store(cache->r),
+						  PROVENANCE_LINES_REF);
+	if (!cache->have_ref)
+		return NULL;
+
+	c = oidmap_get(&cache->records, commit);
+	if (!c) {
+		CALLOC_ARRAY(c, 1);
+		oidcpy(&c->entry.oid, commit);
+		oidmap_put(&cache->records, c);
+		load_record(cache, c);
+	}
+	return c->found ? &c->rec : NULL;
+}
+
 __attribute__((format (printf, 4, 5)))
 static int range_error(struct strbuf *err, const struct provenance_file *file,
 		       const struct provenance_range *range,

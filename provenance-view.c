@@ -17,35 +17,6 @@
 #include "strbuf.h"
 #include "string-list.h"
 
-struct cached_record {
-	struct oidmap_entry entry;
-	/* the record is valid */
-	int found;
-	struct provenance_record rec;
-};
-
-void provenance_cache_init(struct provenance_cache *cache,
-			   struct repository *r)
-{
-	cache->r = r;
-	oidmap_init(&cache->records, 0);
-	cache->have_ref = -1;
-}
-
-static void free_cached_record(void *p)
-{
-	struct cached_record *c = p;
-
-	provenance_record_release(&c->rec);
-	free(c);
-}
-
-void provenance_cache_release(struct provenance_cache *cache)
-{
-	oidmap_clear_with_free(&cache->records, free_cached_record);
-	cache->have_ref = -1;
-}
-
 /*
  * Read and parse the line record of `commit` into `rec`.  Returns 0 on
  * success, or -1 if there is no record or, after a warning, if it does
@@ -70,43 +41,6 @@ out:
 	strbuf_release(&buf);
 	strbuf_release(&err);
 	return ret;
-}
-
-static void load_record(struct provenance_cache *cache,
-			struct cached_record *c)
-{
-	if (!read_lines(cache->r, &c->entry.oid, &c->rec)) {
-		if (oideq(&c->rec.commit, &c->entry.oid))
-			c->found = 1;
-		else
-			warning(_("ignoring provenance record of %s: it names commit %s"),
-				oid_to_hex(&c->entry.oid),
-				oid_to_hex(&c->rec.commit));
-	}
-	if (!c->found)
-		provenance_record_release(&c->rec);
-}
-
-const struct provenance_record *
-provenance_cache_get(struct provenance_cache *cache,
-		     const struct object_id *commit)
-{
-	struct cached_record *c;
-
-	if (cache->have_ref < 0)
-		cache->have_ref = refs_ref_exists(get_main_ref_store(cache->r),
-						  PROVENANCE_LINES_REF);
-	if (!cache->have_ref)
-		return NULL;
-
-	c = oidmap_get(&cache->records, commit);
-	if (!c) {
-		CALLOC_ARRAY(c, 1);
-		oidcpy(&c->entry.oid, commit);
-		oidmap_put(&cache->records, c);
-		load_record(cache, c);
-	}
-	return c->found ? &c->rec : NULL;
 }
 
 struct provenance_diff {

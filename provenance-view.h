@@ -1,8 +1,6 @@
 #ifndef PROVENANCE_VIEW_H
 #define PROVENANCE_VIEW_H
 
-#include "oidmap.h"
-
 struct commit;
 struct diff_filespec;
 struct diff_options;
@@ -15,29 +13,6 @@ struct strbuf;
  * Showing provenance records to the user.  See the "Viewing" section
  * of Documentation/technical/git-provenance.adoc.
  */
-
-/* Parsed line records, read on demand and kept by commit. */
-struct provenance_cache {
-	struct repository *r;
-	struct oidmap records;
-	/* whether refs/provenance/lines exists: 1, 0, or -1 if not checked */
-	int have_ref;
-};
-
-void provenance_cache_init(struct provenance_cache *cache,
-			   struct repository *r);
-
-/*
- * Return the line record of `commit`, or NULL if it has none.  A record
- * that cannot be read or parsed, or that names another commit, counts
- * as none, with a warning the first time it is looked up.
- */
-const struct provenance_record *
-provenance_cache_get(struct provenance_cache *cache,
-		     const struct object_id *commit);
-
-/* Forget all records, and whether the ref exists. */
-void provenance_cache_release(struct provenance_cache *cache);
 
 /*
  * Where "diff --provenance" takes the marks of its lines from.  The
