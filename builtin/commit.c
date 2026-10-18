@@ -43,12 +43,8 @@
 #include "commit-graph.h"
 #include "pretty.h"
 #include "provenance.h"
-#include "provenance-attribute.h"
+#include "provenance-commit.h"
 #include "provenance-journal.h"
-#include "notes.h"
-#include "notes-utils.h"
-#include "hex.h"
-#include "odb.h"
 #include "refs.h"
 #include "trailer.h"
 
@@ -1705,7 +1701,7 @@ static int git_commit_config(const char *k, const char *v,
 }
 
 /*
- * Attribute the lines of the commit about to be made, with its first
+ * Compute the records of the commit about to be made, with its first
  * parent among `parents`.  Dies if provenance.require is set and no
  * session is linked to the commit.
  */
@@ -1714,29 +1710,16 @@ static void compute_provenance(struct commit_list *parents,
 			       struct provenance_record *lines,
 			       struct provenance_reasoning *reasoning)
 {
-	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
-	struct ident_split ident;
-	char *human;
 	int require = 0;
 
-	if (split_ident_line(&ident, author_ident, strlen(author_ident))) {
-		rollback_index_files();
-		die(_("malformed author ident '%s'"), author_ident);
-	}
-	human = xstrfmt("%.*s <%.*s>",
-			(int)(ident.name_end - ident.name_begin), ident.name_begin,
-			(int)(ident.mail_end - ident.mail_begin), ident.mail_begin);
-
-	if (provenance_journal_read(the_repository, &journal) ||
-	    provenance_attribute(the_repository, parents ? parents->item : NULL,
-				 &the_repository->index->cache_tree->oid,
-				 &journal, provenance_session, human,
-				 lines, reasoning)) {
+	if (provenance_commit_records(the_repository,
+				      parents ? parents->item : NULL,
+				      &the_repository->index->cache_tree->oid,
+				      author_ident, provenance_session, NULL,
+				      lines, reasoning) < 0) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
 	}
-	provenance_journal_release(&journal);
-	free(human);
 
 	if (!reasoning->sessions_nr &&
 	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
@@ -1744,78 +1727,6 @@ static void compute_provenance(struct commit_list *parents,
 		rollback_index_files();
 		die(_("no session is linked to this commit and provenance.require is set"));
 	}
-}
-
-/*
- * Write `record` as the note for `commit` under the notes ref `ref`,
- * and queue the update of `ref` into `transaction`.
- */
-static int queue_provenance_note(struct ref_transaction *transaction,
-				 const char *ref,
-				 const struct object_id *commit,
-				 const struct strbuf *record,
-				 const char *reflog_msg,
-				 struct strbuf *err)
-{
-	struct notes_tree t = { 0 };
-	struct object_id old_oid, blob_oid, notes_oid;
-	struct strbuf msg = STRBUF_INIT;
-	int ret;
-
-	if (refs_read_ref(get_main_ref_store(the_repository), ref, &old_oid))
-		oidcpy(&old_oid, null_oid(the_hash_algo));
-	if (odb_write_object(the_repository->objects, record->buf, record->len,
-			     OBJ_BLOB, &blob_oid)) {
-		strbuf_addf(err, _("unable to write the record for '%s'"), ref);
-		return -1;
-	}
-
-	/*
-	 * init_notes() also makes `ref` the notes namespace for ref
-	 * decorations, which "git commit" never loads.
-	 */
-	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
-	add_note(&t, commit, &blob_oid, NULL);
-	strbuf_addf(&msg, "Provenance for %s\n", oid_to_hex(commit));
-	create_notes_commit(the_repository, &t, NULL, msg.buf, msg.len,
-			    &notes_oid);
-	free_notes(&t);
-
-	ret = ref_transaction_update(transaction, ref, &notes_oid, &old_oid,
-				     NULL, NULL, 0, reflog_msg, err);
-	strbuf_release(&msg);
-	return ret;
-}
-
-static int queue_provenance(struct ref_transaction *transaction,
-			    const struct object_id *oid,
-			    struct provenance_record *lines,
-			    struct provenance_reasoning *reasoning,
-			    const char *reflog_msg,
-			    struct strbuf *err)
-{
-	struct strbuf buf = STRBUF_INIT, msg = STRBUF_INIT;
-	int ret;
-
-	strbuf_addf(&msg, "%s: provenance for %s", reflog_msg,
-		    repo_find_unique_abbrev(the_repository, oid, DEFAULT_ABBREV));
-
-	oidcpy(&lines->commit, oid);
-	provenance_record_format(lines, &buf);
-	ret = queue_provenance_note(transaction, PROVENANCE_LINES_REF, oid,
-				    &buf, msg.buf, err);
-
-	if (!ret && reasoning->sessions_nr) {
-		strbuf_reset(&buf);
-		oidcpy(&reasoning->commit, oid);
-		provenance_reasoning_format(reasoning, &buf);
-		ret = queue_provenance_note(transaction, PROVENANCE_REASONING_REF,
-					    oid, &buf, msg.buf, err);
-	}
-
-	strbuf_release(&buf);
-	strbuf_release(&msg);
-	return ret;
 }
 
 int cmd_commit(int argc,
@@ -2086,8 +1997,9 @@ int cmd_commit(int argc,
 	    queue_head_update_with_reflog(transaction, current_head, &oid,
 					  reflog_msg, &sb, &err) ||
 	    (record_provenance &&
-	     queue_provenance(transaction, &oid, &prov_lines, &prov_reasoning,
-			      reflog_msg, &err)) ||
+	     provenance_queue_records(the_repository, transaction, &oid,
+				      &prov_lines, &prov_reasoning,
+				      reflog_msg, &err)) ||
 	    ref_transaction_commit(transaction, &err)) {
 		rollback_index_files();
 		die("%s", err.buf);
