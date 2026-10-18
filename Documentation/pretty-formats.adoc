@@ -365,6 +365,21 @@ multiple times, the last occurrence wins.
 `key_value_separator=<sep>`;; specify the separator inserted between
    the key and value of each trailer. Defaults to ": ". Otherwise it
    shares the same semantics as `separator=<sep>` above.
+++%(provenance:++_<field>_++)++::
+the provenance of the commit as recorded by its provenance records (see
+linkgit:git-provenance[1]); empty if the commit has no such record.
+_<field>_ is one of:
++
+`summary`;; the summary of the reasoning record, without its final
+   line feed.
+`share`;; the share of the lines added by the commit that an AI agent
+   wrote alone or together with a human (lines marked `AI` or `MIXED`
+   in the line record), as a percentage rounded to the nearest integer
+   and followed by `%`, e.g. `73%`.
+`models`;; the models of the AI actors of the line record, each once,
+   in the order in which they first appear, separated by commas.
+`sessions`;; the sessions of the AI actors of the line record, each
+   once, in the order in which they first appear, separated by commas.
 
 NOTE: Some placeholders may depend on other options given to the
 revision traversal engine. For example, the +%g*+ reflog options will

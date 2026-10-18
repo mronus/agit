@@ -9,6 +9,7 @@ struct diff_options;
 struct object_id;
 struct provenance_record;
 struct repository;
+struct strbuf;
 
 /*
  * Showing provenance records to the user.  See the "Viewing" section
@@ -112,5 +113,16 @@ char provenance_marks_get(const struct provenance_marks *marks, int post,
 			  long line);
 
 void provenance_marks_release(struct provenance_marks *marks);
+
+/*
+ * Append the field `field`, of length `len`, of the provenance of
+ * `commit` to `sb`, as the pretty-format placeholder
+ * "%(provenance:<field>)" shows it.  Returns 0, or -1 without
+ * appending anything if `field` is not a known field.
+ */
+int provenance_format_field(struct repository *r,
+			    const struct object_id *commit,
+			    const char *field, size_t len,
+			    struct strbuf *sb);
 
 #endif /* PROVENANCE_VIEW_H */

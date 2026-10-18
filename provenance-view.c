@@ -15,6 +15,7 @@
 #include "refs.h"
 #include "repository.h"
 #include "strbuf.h"
+#include "string-list.h"
 
 struct cached_record {
 	struct oidmap_entry entry;
@@ -401,4 +402,108 @@ void provenance_marks_release(struct provenance_marks *marks)
 	FREE_AND_NULL(marks->pre);
 	FREE_AND_NULL(marks->post);
 	marks->pre_nr = marks->post_nr = 0;
+}
+
+/* As read_lines(), for the reasoning record of `commit`. */
+static int read_reasoning(struct repository *r, const struct object_id *commit,
+			  struct provenance_reasoning *rec)
+{
+	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
+	int ret = -1;
+
+	if (provenance_read_reasoning(r, commit, &buf) <= 0)
+		goto out;
+	if (provenance_reasoning_parse(buf.buf, buf.len, r->hash_algo,
+				       rec, &err)) {
+		warning(_("ignoring malformed reasoning record of %s: %s"),
+			oid_to_hex(commit), err.buf);
+		goto out;
+	}
+	ret = 0;
+out:
+	strbuf_release(&buf);
+	strbuf_release(&err);
+	return ret;
+}
+
+/* The share of the added lines that are marked AI or MIXED, in percent. */
+static void format_share(const struct provenance_record *rec,
+			 struct strbuf *sb)
+{
+	uintmax_t total = 0, ai = 0;
+
+	for (size_t i = 0; i < rec->files_nr; i++) {
+		const struct provenance_file *file = &rec->files[i];
+
+		for (size_t j = 0; j < file->ranges_nr; j++) {
+			const struct provenance_range *range = &file->ranges[j];
+			uintmax_t n;
+
+			if (range->side != '+' || range->end < range->begin)
+				continue;
+			n = range->end - range->begin + 1;
+			total += n;
+			if (range->mark == PROVENANCE_MARK_AI ||
+			    range->mark == PROVENANCE_MARK_MIXED)
+				ai += n;
+		}
+	}
+	strbuf_addf(sb, "%"PRIuMAX"%%",
+		    total ? (ai * 100 + total / 2) / total : 0);
+}
+
+/* The distinct models (or sessions) of the AI actors, in order. */
+static void format_actors(const struct provenance_record *rec, int sessions,
+			  struct strbuf *sb)
+{
+	struct string_list seen = STRING_LIST_INIT_NODUP;
+
+	for (size_t i = 0; i < rec->actors_nr; i++) {
+		const struct provenance_actor *actor = &rec->actors[i];
+		char *value;
+
+		if (actor->kind != PROVENANCE_ACTOR_AI)
+			continue;
+		value = sessions ? actor->session : actor->model;
+		if (unsorted_string_list_has_string(&seen, value))
+			continue;
+		if (seen.nr)
+			strbuf_addch(sb, ',');
+		strbuf_addstr(sb, value);
+		string_list_append(&seen, value);
+	}
+	string_list_clear(&seen, 0);
+}
+
+int provenance_format_field(struct repository *r,
+			    const struct object_id *commit,
+			    const char *field, size_t len,
+			    struct strbuf *sb)
+{
+	int share = !xstrncmpz("share", field, len);
+	int models = !xstrncmpz("models", field, len);
+	int sessions = !xstrncmpz("sessions", field, len);
+
+	if (!xstrncmpz("summary", field, len)) {
+		struct provenance_reasoning rec = PROVENANCE_REASONING_INIT;
+
+		if (!read_reasoning(r, commit, &rec)) {
+			strbuf_strip_suffix(&rec.summary, "\n");
+			strbuf_addbuf(sb, &rec.summary);
+		}
+		provenance_reasoning_release(&rec);
+	} else if (share || models || sessions) {
+		struct provenance_record rec = PROVENANCE_RECORD_INIT;
+
+		if (!read_lines(r, commit, &rec)) {
+			if (share)
+				format_share(&rec, sb);
+			else
+				format_actors(&rec, sessions, sb);
+		}
+		provenance_record_release(&rec);
+	} else {
+		return -1;
+	}
+	return 0;
 }
