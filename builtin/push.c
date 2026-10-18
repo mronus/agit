@@ -469,8 +469,7 @@ static int push_with_options(struct transport *transport, struct refspec *rs,
 		transport->smart_options->cas = &cas;
 	}
 
-	if (provenance)
-		transport->pushed_refs = &pushed;
+	transport->pushed_refs = &pushed;
 
 	if (verbosity > 0)
 		fprintf(stderr, _("Pushing to %s\n"), anon_url);
@@ -478,6 +477,9 @@ static int push_with_options(struct transport *transport, struct refspec *rs,
 	err = transport_push(the_repository, transport,
 			     rs, flags, &reject_reasons);
 	trace2_region_leave("push", "transport_push", the_repository);
+	if (!(flags & (TRANSPORT_PUSH_DRY_RUN |
+		       TRANSPORT_RECURSE_SUBMODULES_ONLY)))
+		provenance_update_tracking(the_repository, remote, pushed);
 	if (err && provenance && !(flags & TRANSPORT_PUSH_DRY_RUN))
 		retry = provenance_push_rejected(pushed, provenance,
 						 &refused_only, &other_errors);

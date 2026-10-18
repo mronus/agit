@@ -761,6 +761,16 @@ them as above, and pushes the provenance refs once more; if that is
 rejected too because the remote moved again, the push fails with a
 hint to run `git fetch <name>`.
 
+A provenance ref that the push updated on the remote, whether added
+on its own or named in the refspecs, sets its tracking ref
+`refs/provenance/remotes/<name>/<kind>` to the pushed value, with the
+reflog message `update by push`, as a pushed branch sets its
+remote-tracking branch. `transport_update_tracking_ref()` only sees
+`remote.<name>.fetch`, which does not hold the implicit refspecs, so
+`push` does it from the push result. The next fetch then finds the
+tracking ref up to date and has nothing to merge. `--dry-run` changes
+nothing, and a remote that opted out keeps no tracking refs.
+
 A remote may refuse the provenance refs for another reason: a hook
 that accepts only branches, or a hosting service that does not allow
 other namespaces. The branches the user asked for are what the push

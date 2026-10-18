@@ -498,6 +498,37 @@ void provenance_warn_refused(const struct ref *refs,
 	strbuf_release(&list);
 }
 
+void provenance_update_tracking(struct repository *r, struct remote *remote,
+				const struct ref *refs)
+{
+	struct ref_store *store = get_main_ref_store(r);
+
+	if (!remote_transfers(r, remote))
+		return;
+
+	for (const struct ref *ref = refs; ref; ref = ref->next) {
+		struct strbuf tracking = STRBUF_INIT;
+		const char *kind;
+
+		if ((ref->status != REF_STATUS_OK &&
+		     ref->status != REF_STATUS_UPTODATE) ||
+		    !is_provenance_ref(ref->name) ||
+		    refspec_maps(&remote->fetch, ref->name) ||
+		    !skip_prefix(ref->name, "refs/provenance/", &kind))
+			continue;
+
+		tracking_ref_of(&tracking, remote->name, kind);
+		if (ref->deletion)
+			refs_delete_ref(store, "update by push", tracking.buf,
+					NULL, 0);
+		else
+			refs_update_ref(store, "update by push", tracking.buf,
+					&ref->new_oid, NULL, 0,
+					UPDATE_REFS_MSG_ON_ERR);
+		strbuf_release(&tracking);
+	}
+}
+
 int provenance_fetch_rejected(struct repository *r, const char *remote_name,
 			      const struct ref *refs)
 {

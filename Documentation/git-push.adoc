@@ -514,7 +514,11 @@ alone or with `HEAD:refs/for/main` for a review system, or when
 `remote.<name>.provenance` is false.  The provenance refs are forced
 only with `--force`; `--force-with-lease` does not apply to them, and
 when it is given without a ref they are pushed separately, without a
-lease.
+lease.  A provenance ref that was pushed, whether added this way or
+named in the refspecs, also updates its tracking ref
+`refs/provenance/remotes/<name>/<kind>`, as a pushed branch updates
+its remote-tracking branch, so that the next fetch has nothing to
+merge.
 
 If the remote rejects a provenance ref because it moved, `git push`
 fetches the provenance refs of the remote, merges them into the local

@@ -563,4 +563,30 @@ test_expect_success 'push --atomic fails if a hook refuses provenance' '
 	test_cmp expect actual
 '
 
+test_expect_success 'push updates the tracking refs of the provenance refs' '
+	git clone remote.git track &&
+	git -C track config set core.logAllRefUpdates always &&
+	commit_in track tracked s5 &&
+	git -C track for-each-ref refs/provenance/remotes/ >expect &&
+	git -C track push --dry-run &&
+	git -C track for-each-ref refs/provenance/remotes/ >actual &&
+	test_cmp expect actual &&
+	git -C track push &&
+	git -C track rev-parse refs/provenance/lines \
+		refs/provenance/reasoning >expect &&
+	git -C remote.git rev-parse refs/provenance/lines \
+		refs/provenance/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C track rev-parse refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C track reflog show --format=%gs -1 \
+		refs/provenance/remotes/origin/lines >actual &&
+	echo "update by push" >expect &&
+	test_cmp expect actual &&
+	git -C track fetch -v 2>err &&
+	test_grep "\[up to date\] *refs/provenance/lines *-> refs/provenance/remotes/origin/lines" err &&
+	test_grep ! "^fast-forwarded\|^merged\|^created" err
+'
+
 test_done

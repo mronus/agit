@@ -83,6 +83,17 @@ void provenance_warn_refused(const struct ref *refs,
 			     const char *remote_name);
 
 /*
+ * Set the tracking ref of each provenance ref that the push to
+ * `remote` whose result is `refs` updated to the pushed value, as push
+ * updates remote-tracking branches, so that the next fetch has
+ * nothing to merge.  Nothing is updated under the conditions in which
+ * provenance_fetch_refspecs() adds nothing for `remote`, or for a
+ * provenance ref that the configured refspecs of `remote` map.
+ */
+void provenance_update_tracking(struct repository *r, struct remote *remote,
+				const struct ref *refs);
+
+/*
  * Fetch the provenance refs that the push whose result is `refs`
  * failed to update from the remote `remote_name` and merge them into
  * the local provenance refs, by running "git fetch".  The cached refs
