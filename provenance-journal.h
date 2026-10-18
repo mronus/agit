@@ -3,6 +3,7 @@
 
 #include "hash.h"
 
+struct oid_array;
 struct pathspec;
 struct repository;
 struct strbuf;
@@ -78,12 +79,33 @@ int provenance_journal_append(struct repository *r,
 			      const struct provenance_journal_entry *e);
 
 /*
- * Remove the journal of the current worktree of `r`, holding the
- * journal's lock while doing so.  A missing journal is not an error.
- * Returns 0 on success, or -1 with errno set, without reporting the
- * error.
+ * Remove the journal of the current worktree of `r`, and its picks
+ * (see provenance_picks_append()), holding the journal's lock while
+ * doing so.  A missing journal or picks file is not an error.  Returns
+ * 0 on success, or -1 with errno set, without reporting the error.
  */
 int provenance_journal_clear(struct repository *r);
+
+/*
+ * The picks of a worktree are the commits that "cherry-pick
+ * --no-commit" applied to it since the last commit, whose records the
+ * next commit carries over.  They are listed in
+ * "$GIT_DIR/provenance/picks", next to the journal, one full object
+ * id per line, and removed with the journal.
+ *
+ * provenance_picks_append() appends `oid` to the picks of the current
+ * worktree of `r`, holding the journal's lock while doing so.  Returns
+ * 0 on success, or -1 after reporting an error.
+ *
+ * provenance_picks_read() appends the picks of the current worktree of
+ * `r` to `picks`, in the order in which they were made.  A missing
+ * picks file is empty.  Malformed lines are skipped with a warning.
+ * Returns 0 on success, or -1 after reporting an error if the file
+ * cannot be read.
+ */
+int provenance_picks_append(struct repository *r,
+			    const struct object_id *oid);
+int provenance_picks_read(struct repository *r, struct oid_array *picks);
 
 /*
  * Read the journal of the current worktree of `r` into `j`, which

@@ -378,3 +378,14 @@ other commit consumes all the stamps, including those for changes it
 does not include, such as changes left unstaged by `git add -p`; lines
 from those changes are `HUMAN` when they are committed later.  The
 commit skips entries whose objects are missing with a warning.
+
+Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
+that `git cherry-pick --no-commit` applied since the last commit, so
+that the commit made afterwards carries over their records.  It is a
+text file with LF line endings and one full object id per line, in
+the order in which the commits were applied; `cherry-pick` appends to
+it while holding `$GIT_DIR/provenance/journal.lock`, and only when
+provenance is enabled.  A reader ignores lines that do not parse, with
+a warning.  The commits that remove the journal remove this file with
+it, and only they: `git stamp` leaves it alone.  Like the journal, it
+is never transferred.

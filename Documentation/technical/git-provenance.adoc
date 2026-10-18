@@ -534,10 +534,18 @@ squash, fixup::
 	marks. Sessions are listed once and summaries concatenated.
 
 revert::
-	The sides swap: restored lines come from the source's parent and
-	get the marks of its `-` ranges, and deleted lines get those of
-	its `+` ranges. Reasoning comes from the journal only, as the
-	source's reasoning explains the change, not its revert.
+	The sides swap: the lines the revert deletes get the marks of
+	the `+` ranges of the source. The lines it restores, those of
+	the source's parent that the source deleted, get the marks of
+	whoever wrote them: a blame of the parent, as `git blame` runs
+	it (following renames), finds the commit that introduced each
+	line, and the line takes the actors of the `+` range of that
+	commit's line record that covers it. A line whose commit has no
+	line record, or whose range is `UNKNOWN`, is `UNKNOWN`; a human
+	of that record is the human of the revert. This costs one blame
+	per file the source changes, which is acceptable as reverts are
+	rare. Reasoning comes from the journal only, as the source's
+	reasoning explains the change, not its revert.
 
 A rewrite writes a record even if none of its sources has one: the
 lines it takes from them are `UNKNOWN`, and the lines it adds itself,
@@ -552,6 +560,30 @@ the source. When the sequencer runs `git commit` to let the user edit
 a message, it names the source with a hidden option, as nothing else
 does for a clean revert or a squash; `git commit` run by hand finds it
 through `CHERRY_PICK_HEAD` or `REVERT_HEAD`.
+
+When `rebase -i` stops at a `fixup` or `squash` whose changes
+conflict, the user may conclude it by hand instead of with `rebase
+--continue`. `git commit` then finds that command's commit, as
+`rebase-merge/stopped-sha` names it and it is the last of
+`rebase-merge/current-fixups`, as long as `HEAD` is still the commit
+the rebase stopped with. `git commit --amend` gets the sources that
+`rebase --continue` would give it, `HEAD` and then that commit, and a
+plain `git commit` takes the commit as a pick, whose changes are found
+in the new commit. The following `rebase --continue` finds nothing
+left to commit and leaves the records alone.
+
+`cherry-pick --no-commit` makes no commit and writes no
+`CHERRY_PICK_HEAD`, so it lists the commits it applies in a `picks`
+file next to the journal (see the format document). The next `git
+commit` takes them as sources after the commit being amended and the
+one being picked, in the order they were applied, all found in the
+new commit, so that several `-n` picks followed by one commit carry
+the records of each. Every commit that empties the journal removes
+the file with it. As the user may have discarded a
+pick before committing, such a source is tentative: its reasoning is
+attached only if a line of the commit takes its owners from it, as
+for `adopt`. A revert takes no picks; `revert --no-commit` writes
+`REVERT_HEAD`, which names the last commit reverted only.
 
 Not covered yet: merges recreated by `rebase --rebase-merges`,
 `git replay`, `git history`, and `git am` of mailbox patches, which
@@ -785,6 +817,9 @@ Performance
   output. A fan-out tree lookup is cheap, and parsed records are
   cached for the run.
 
+- Revert: one blame per file that the reverted commit changes, to
+  find who wrote the lines it restores.
+
 - `diff --provenance` of uncommitted changes: the journal intervals
   are computed once per diff, then each shown path costs one
   attribution walk.
@@ -842,9 +877,10 @@ Each step is implemented and reviewed on its own:
 
 5. Rewrites: (a) remapping in amend, rebase and cherry-pick, with
    lines taken from commits without records marked `UNKNOWN`;
-   (b) `adopt` for foreign rewrites (done), the marks of lines a
-   revert restores taken from a blame of the parent, and the records
-   of a fixup or squash finished by a hand-run `git commit --amend`.
+   (b) `adopt` for foreign rewrites, the marks of lines a revert
+   restores taken from a blame of the parent, the records of a fixup
+   or squash finished by a hand-run `git commit`, and those of
+   `cherry-pick --no-commit` (done).
 
 6. Hardening: `purge`, `fast-export`/`fast-import` and `format-patch`
    support, recording the conflict resolutions of merge commits, the

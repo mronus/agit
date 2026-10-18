@@ -42,6 +42,12 @@ struct provenance_source {
 	const struct provenance_record *lines;
 	/* NULL if the commit has no reasoning record */
 	const struct provenance_reasoning *reasoning;
+	/*
+	 * The commit may not be one that the new commit was made from:
+	 * its reasoning record is only carried over if a line of the new
+	 * commit takes its owners from it.
+	 */
+	unsigned tentative : 1;
 };
 
 /*
@@ -50,14 +56,19 @@ struct provenance_source {
  * PROVENANCE_REWRITE_AMEND: `sources[0]` is the commit being amended.
  *
  * PROVENANCE_REWRITE_REVERT: there is one source, and the commit
- * undoes its changes.
+ * undoes its changes.  The lines that the source deleted, which the
+ * commit restores, are owned as a blame of the source's first parent
+ * finds them: by the actors of the range that covers the line in the
+ * line record of the commit that introduced it; such a line is UNKNOWN
+ * if that commit has no line record or the range is UNKNOWN.  The lines
+ * that the source added, which the commit deletes, are attributed as
+ * its line record says.
  *
  * PROVENANCE_REWRITE_ADOPT: the commit was made without the extension
  * (see the "Re-anchoring" section of
  * Documentation/technical/git-provenance.adoc).  The lines that no
- * source accounts for are UNKNOWN instead of the human's, the
- * reasoning records of the sources that no line of the commit takes
- * its owners from are left out, and `capture` is `adopted`.  The
+ * source accounts for are UNKNOWN instead of the human's, and
+ * `capture` is `adopted`.  The sources are usually tentative.  The
  * journal must be empty.
  */
 #define PROVENANCE_REWRITE_AMEND  (1 << 0)
@@ -86,7 +97,9 @@ struct provenance_source {
  *
  * The reasoning record names the sessions of the reasoning records of
  * the sources, unless PROVENANCE_REWRITE_REVERT is set, followed by the
- * sessions the journal attaches to the commit.
+ * sessions the journal attaches to the commit.  The reasoning record of
+ * a tentative source is left out if no line of the commit takes its
+ * owners from that source.
  */
 int provenance_attribute_rewrite(struct repository *r,
 				 struct commit *parent,

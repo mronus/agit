@@ -6,6 +6,7 @@
 #include "hex.h"
 #include "lockfile.h"
 #include "odb.h"
+#include "oid-array.h"
 #include "odb/transaction.h"
 #include "path.h"
 #include "pathspec.h"
@@ -112,54 +113,100 @@ static int check_entry(const struct provenance_journal_entry *e)
 	return 0;
 }
 
-int provenance_journal_append(struct repository *r,
-			      const struct provenance_journal_entry *e)
+/* Take the journal's lock, creating its directory if needed. */
+static int lock_journal(struct repository *r, struct lock_file *lk,
+			char *path)
 {
-	struct lock_file lk = LOCK_INIT;
-	struct strbuf buf = STRBUF_INIT;
-	char *path = repo_git_path(r, "provenance/journal");
-	int ret = -1;
-
-	if (check_entry(e))
-		goto out;
-
-	if (safe_create_leading_directories(r, path)) {
-		error_errno(_("unable to create directory for '%s'"), path);
-		goto out;
-	}
-	if (repo_hold_lock_file_for_update_timeout(r, &lk, path,
+	if (safe_create_leading_directories(r, path))
+		return error_errno(_("unable to create directory for '%s'"),
+				   path);
+	if (repo_hold_lock_file_for_update_timeout(r, lk, path,
 						   LOCK_REPORT_ON_ERROR,
 						   JOURNAL_LOCK_TIMEOUT_MS) < 0)
-		goto out;
+		return -1;
+	return 0;
+}
 
-	/*
-	 * Rewrite the journal through the lock file rather than
-	 * appending to it in place, so that a reader never sees a
-	 * partially written entry.  The journal only holds the stamps
-	 * made since the last commit, so it stays small.
-	 */
+/*
+ * Append `line` and a LF to the file `path`, by writing the result to
+ * the lock file `lk` of `path` and committing it.
+ *
+ * The file is rewritten through the lock file rather than appended to
+ * in place, so that a reader never sees a partially written line.  The
+ * files only hold what was recorded since the last commit, so they
+ * stay small.
+ */
+static int append_line(struct lock_file *lk, const char *path,
+		       const struct strbuf *line)
+{
+	struct strbuf buf = STRBUF_INIT;
+	int ret = -1;
+
 	if (strbuf_read_file(&buf, path, 0) < 0 && errno != ENOENT) {
 		error_errno(_("unable to read '%s'"), path);
 		goto out;
 	}
 	if (buf.len && buf.buf[buf.len - 1] != '\n')
 		strbuf_addch(&buf, '\n');
-	provenance_journal_entry_format(e, &buf);
+	strbuf_addbuf(&buf, line);
 	strbuf_addch(&buf, '\n');
 
-	if (write_in_full(get_lock_file_fd(&lk), buf.buf, buf.len) < 0) {
-		error_errno(_("unable to write '%s'"), get_lock_file_path(&lk));
+	if (write_in_full(get_lock_file_fd(lk), buf.buf, buf.len) < 0) {
+		error_errno(_("unable to write '%s'"), get_lock_file_path(lk));
 		goto out;
 	}
-	if (commit_lock_file(&lk)) {
+	if (commit_lock_file(lk)) {
 		error_errno(_("unable to write '%s'"), path);
 		goto out;
 	}
 	ret = 0;
 
 out:
-	rollback_lock_file(&lk);
 	strbuf_release(&buf);
+	return ret;
+}
+
+int provenance_journal_append(struct repository *r,
+			      const struct provenance_journal_entry *e)
+{
+	struct lock_file lk = LOCK_INIT;
+	struct strbuf line = STRBUF_INIT;
+	char *path = repo_git_path(r, "provenance/journal");
+	int ret = -1;
+
+	if (check_entry(e) || lock_journal(r, &lk, path))
+		goto out;
+	provenance_journal_entry_format(e, &line);
+	ret = append_line(&lk, path, &line);
+
+out:
+	rollback_lock_file(&lk);
+	strbuf_release(&line);
+	free(path);
+	return ret;
+}
+
+int provenance_picks_append(struct repository *r,
+			    const struct object_id *oid)
+{
+	struct lock_file lk = LOCK_INIT, picks_lk = LOCK_INIT;
+	struct strbuf line = STRBUF_INIT;
+	char *journal = repo_git_path(r, "provenance/journal");
+	char *path = repo_git_path(r, "provenance/picks");
+	int ret = -1;
+
+	if (lock_journal(r, &lk, journal) ||
+	    repo_hold_lock_file_for_update(r, &picks_lk, path,
+					   LOCK_REPORT_ON_ERROR) < 0)
+		goto out;
+	strbuf_add_oid_hex(&line, oid);
+	ret = append_line(&picks_lk, path, &line);
+
+out:
+	rollback_lock_file(&picks_lk);
+	rollback_lock_file(&lk);
+	strbuf_release(&line);
+	free(journal);
 	free(path);
 	return ret;
 }
@@ -168,16 +215,18 @@ int provenance_journal_clear(struct repository *r)
 {
 	struct lock_file lk = LOCK_INIT;
 	char *path = repo_git_path(r, "provenance/journal");
+	char *picks = repo_git_path(r, "provenance/picks");
 	int ret = 0;
 
-	if (!file_exists(path))
+	if (!file_exists(path) && !file_exists(picks))
 		goto out;
 	if (repo_hold_lock_file_for_update_timeout(r, &lk, path, 0,
 						   JOURNAL_LOCK_TIMEOUT_MS) < 0) {
 		ret = -1;
 		goto out;
 	}
-	if (unlink(path) && errno != ENOENT) {
+	if ((unlink(path) && errno != ENOENT) ||
+	    (unlink(picks) && errno != ENOENT)) {
 		int saved_errno = errno;
 
 		ret = -1;
@@ -188,6 +237,43 @@ int provenance_journal_clear(struct repository *r)
 	rollback_lock_file(&lk);
 
 out:
+	free(path);
+	free(picks);
+	return ret;
+}
+
+int provenance_picks_read(struct repository *r, struct oid_array *picks)
+{
+	struct strbuf buf = STRBUF_INIT;
+	char *path = repo_git_path(r, "provenance/picks");
+	char *line, *next;
+	int lineno = 0, ret = 0;
+
+	if (strbuf_read_file(&buf, path, 0) < 0) {
+		if (errno != ENOENT)
+			ret = error_errno(_("unable to read '%s'"), path);
+		goto out;
+	}
+
+	for (line = buf.buf; line < buf.buf + buf.len; line = next) {
+		struct object_id oid;
+		const char *end;
+
+		next = strchrnul(line, '\n');
+		if (*next)
+			*next++ = '\0';
+		lineno++;
+		if (parse_oid_hex_algop(line, &oid, &end, r->hash_algo) ||
+		    *end) {
+			warning(_("ignoring malformed line %d in '%s'"),
+				lineno, path);
+			continue;
+		}
+		oid_array_append(picks, &oid);
+	}
+
+out:
+	strbuf_release(&buf);
 	free(path);
 	return ret;
 }

@@ -2,6 +2,7 @@
 #define PROVENANCE_H
 
 #include "hash.h"
+#include "oidmap.h"
 #include "strbuf.h"
 
 struct commit;
@@ -190,6 +191,29 @@ int provenance_read_lines(struct repository *r,
 int provenance_read_reasoning(struct repository *r,
 			      const struct object_id *commit,
 			      struct strbuf *out);
+
+/* Parsed line records, read on demand and kept by commit. */
+struct provenance_cache {
+	struct repository *r;
+	struct oidmap records;
+	/* whether refs/provenance/lines exists: 1, 0, or -1 if not checked */
+	int have_ref;
+};
+
+void provenance_cache_init(struct provenance_cache *cache,
+			   struct repository *r);
+
+/*
+ * Return the line record of `commit`, or NULL if it has none.  A record
+ * that cannot be read or parsed, or that names another commit, counts
+ * as none, with a warning the first time it is looked up.
+ */
+const struct provenance_record *
+provenance_cache_get(struct provenance_cache *cache,
+		     const struct object_id *commit);
+
+/* Forget all records, and whether the ref exists. */
+void provenance_cache_release(struct provenance_cache *cache);
 
 /*
  * Check that the line record `rec` is consistent with `commit`: it

@@ -4,6 +4,7 @@
 
 #include "git-compat-util.h"
 #include "provenance-attribute.h"
+#include "blame.h"
 #include "commit.h"
 #include "diff.h"
 #include "diffcore.h"
@@ -15,6 +16,7 @@
 #include "provenance-journal.h"
 #include "quote.h"
 #include "repository.h"
+#include "revision.h"
 #include "strbuf.h"
 #include "string-list.h"
 #include "strmap.h"
@@ -101,6 +103,29 @@ struct seed {
 	unsigned contributed : 1;
 };
 
+/* The line record of a commit that a blame finds, imported once. */
+struct blamed_record {
+	struct oidmap_entry entry;
+	/* NULL if the commit has no line record */
+	const struct provenance_record *rec;
+	/* per actor of `rec`: its index, -1 for a human */
+	int *actors;
+};
+
+/* Who wrote a line that a revert restores. */
+struct restored_line {
+	/* the record of the commit that wrote it, or NULL */
+	const struct blamed_record *b;
+	/* the range of that record that covers it, or NULL if unknown */
+	const struct provenance_range *range;
+};
+
+/* The lines of a file before the commit that a revert undoes. */
+struct restored_file {
+	size_t nr;
+	struct restored_line lines[FLEX_ARRAY];
+};
+
 struct attribution {
 	struct repository *r;
 	const struct provenance_journal *journal;
@@ -109,6 +134,16 @@ struct attribution {
 	size_t seeds_nr;
 	/* PROVENANCE_REWRITE_* */
 	unsigned flags;
+
+	/*
+	 * For a revert: the records of the commits that a blame of the
+	 * parent of the source finds (struct blamed_record, by commit),
+	 * and who wrote the lines of each path that the source changes
+	 * (path -> struct restored_file).
+	 */
+	struct provenance_cache cache;
+	struct oidmap blamed;
+	struct strmap restored;
 
 	struct session_info *sessions;
 	size_t sessions_nr, sessions_alloc;
@@ -732,13 +767,13 @@ static int read_path(struct attribution *a, const struct object_id *tree,
 }
 
 /*
- * The set of the actors `ids` of a range of the line record of `seed`,
- * or -1 if it names none.
+ * The set of the actors `ids` of a range of the line record `rec`,
+ * whose actors are imported as `actors` says, or -1 if it names none.
  */
-static int seed_set(struct attribution *a, const struct seed *seed,
-		    const char *ids)
+static int record_set(struct attribution *a,
+		      const struct provenance_record *rec, const int *actors,
+		      const char *ids)
 {
-	const struct provenance_record *rec = seed->src->lines;
 	int set = -1;
 
 	while (*ids) {
@@ -747,7 +782,7 @@ static int seed_set(struct attribution *a, const struct seed *seed,
 			provenance_record_actor(rec, ids, len);
 
 		if (actor) {
-			int i = seed->actors[actor - rec->actors];
+			int i = actors[actor - rec->actors];
 
 			if (i < 0)
 				i = a->human;
@@ -786,7 +821,8 @@ static int *seed_lines(struct attribution *a, const struct seed *seed,
 		if (range->mark == PROVENANCE_MARK_UNKNOWN)
 			set = singleton(a, a->unknown);
 		else
-			set = seed_set(a, seed, range->actors);
+			set = record_set(a, seed->src->lines, seed->actors,
+					 range->actors);
 		for (unsigned long l = range->begin; l <= range->end && l <= nr; l++)
 			sets[l - 1] = set;
 	}
@@ -835,6 +871,33 @@ static void unknown_lines(struct attribution *a, mmfile_t *old, mmfile_t *new,
 	}
 	*old_sets = u.old_sets;
 	*new_sets = u.new_sets;
+}
+
+/*
+ * Give the lines of `path` whose set in `sets` (`nr` of them) is not
+ * negative the owners that a blame of the parent of the commit being
+ * reverted finds for them: the actors of the range that covers the
+ * line in the record of the commit that wrote it.  A line whose commit
+ * has no record, or whose record does not say who wrote it, is of
+ * unknown origin.
+ */
+static void restore_owners(struct attribution *a, const char *path,
+			   int *sets, size_t nr)
+{
+	const struct restored_file *rf = strmap_get(&a->restored, path);
+
+	for (size_t i = 0; i < nr; i++) {
+		const struct restored_line *l;
+		int set = -1;
+
+		if (sets[i] < 0)
+			continue;
+		l = rf && i < rf->nr ? &rf->lines[i] : NULL;
+		if (l && l->range)
+			set = record_set(a, l->b->rec, l->b->actors,
+					 l->range->actors);
+		sets[i] = set < 0 ? singleton(a, a->unknown) : set;
+	}
 }
 
 /* Whether the changes of `seed` include some to `path`. */
@@ -986,7 +1049,9 @@ static int merge_owners(struct attribution *a, struct found_owners *fo,
  * deletions that the record covers get its owners, and those that a
  * source without a record changes are of unknown origin; a line that
  * replaces one of those gains the fallback owner, who also owns the
- * lines that no source knows.  Takes ownership of `found`.
+ * lines that no source knows.  For a revert, the lines that the source
+ * deleted, which the revert restores, get the owners that a blame
+ * finds instead (see restore_owners()).  Takes ownership of `found`.
  */
 static int step_found(struct attribution *a, const char *path,
 		      struct file_state *fs, mmfile_t *base,
@@ -994,7 +1059,6 @@ static int step_found(struct attribution *a, const char *path,
 		      mmfile_t found, const struct object_id *found_oid)
 {
 	int revert = !!(a->flags & PROVENANCE_REWRITE_REVERT);
-	char added = revert ? '-' : '+', removed = revert ? '+' : '-';
 	int fallback = singleton(a, a->fallback);
 	struct found_owners owners, deleters;
 	int ret = 0;
@@ -1016,11 +1080,23 @@ static int step_found(struct attribution *a, const char *path,
 		    read_path(a, old_tree, path, &old_oid, &old)) {
 			ret = -1;
 		} else {
-			if (seed->src->lines) {
+			if (revert) {
+				/* first, the lines of `new` the source deleted */
+				unknown_lines(a, &old, &new,
+					      &old_sets, &new_sets);
+				if (new_sets)
+					restore_owners(a, path, new_sets,
+						       count_lines(&new));
+				if (seed->src->lines) {
+					free(old_sets);
+					old_sets = seed_lines(a, seed, path,
+							      '+', &old);
+				}
+			} else if (seed->src->lines) {
 				new_sets = seed_lines(a, seed, path,
-						      added, &new);
+						      '+', &new);
 				old_sets = seed_lines(a, seed, path,
-						      removed, &old);
+						      '-', &old);
 			} else {
 				unknown_lines(a, &old, &new,
 					      &old_sets, &new_sets);
@@ -1502,23 +1578,23 @@ struct provenance_attribution {
 };
 
 /*
- * Declare the AI actors of the line record of `seed`.  An actor whose
- * id is already declared is that actor; the first declaration from a
- * record gives its metadata.
+ * Declare the AI actors of the line record `rec`, and return the index
+ * of each of its actors, -1 for a human.  An actor whose id is already
+ * declared is that actor; the first declaration from a record gives
+ * its metadata.
  */
-static void import_actors(struct attribution *a, struct seed *seed)
+static int *import_actors(struct attribution *a,
+			  const struct provenance_record *rec)
 {
-	const struct provenance_record *rec = seed->src->lines;
+	int *actors;
 
-	if (!rec)
-		return;
-	ALLOC_ARRAY(seed->actors, rec->actors_nr);
+	ALLOC_ARRAY(actors, rec->actors_nr);
 	for (size_t i = 0; i < rec->actors_nr; i++) {
 		const struct provenance_actor *actor = &rec->actors[i];
 		struct session_info *s;
 		size_t j;
 
-		seed->actors[i] = -1;
+		actors[i] = -1;
 		if (actor->kind != PROVENANCE_ACTOR_AI)
 			continue;
 		for (j = 0; j < a->sessions_nr; j++)
@@ -1540,8 +1616,116 @@ static void import_actors(struct attribution *a, struct seed *seed)
 			s->tool = actor->tool;
 			s->source = actor->source;
 		}
-		seed->actors[i] = j;
+		actors[i] = j;
 	}
+	return actors;
+}
+
+/* The record of `commit`, imported once, or NULL if it has none. */
+static const struct blamed_record *blamed_record(struct attribution *a,
+						 struct commit *commit)
+{
+	struct blamed_record *b = oidmap_get(&a->blamed, &commit->object.oid);
+
+	if (!b) {
+		CALLOC_ARRAY(b, 1);
+		oidcpy(&b->entry.oid, &commit->object.oid);
+		b->rec = provenance_cache_get(&a->cache, &commit->object.oid);
+		if (b->rec)
+			b->actors = import_actors(a, b->rec);
+		oidmap_put(&a->blamed, b);
+	}
+	return b->rec ? b : NULL;
+}
+
+/*
+ * Blame `path`, a regular file, in `parent`, and note in `a->restored`
+ * who wrote each of its lines, importing the actors of the records of
+ * the commits that the blame finds.  This is the blame of "git blame
+ * <parent> -- <path>": renames are followed, but lines moved or copied
+ * within or across files are not looked for.
+ */
+static void blame_path(struct attribution *a, struct commit *parent,
+		       const char *path)
+{
+	struct rev_info revs;
+	struct blame_scoreboard sb;
+	struct blame_origin *o;
+	struct blame_entry *ent;
+	struct restored_file *rf;
+
+	repo_init_revisions(a->r, &revs, NULL);
+	add_pending_object(&revs, &parent->object, "");
+	init_scoreboard(&sb);
+	sb.revs = &revs;
+	sb.repo = a->r;
+	sb.path = path;
+	/* do not mark a root commit as a boundary */
+	sb.show_root = 1;
+	sb.xdl_opts = revs.diffopt.xdl_opts & XDF_INDENT_HEURISTIC;
+	setup_scoreboard(&sb, &o);
+	if (sb.num_lines) {
+		o->suspects = blame_entry_prepend(NULL, 0, sb.num_lines, o);
+		prio_queue_put(&sb.commits, o->commit);
+	}
+	blame_origin_decref(o);
+	assign_blame(&sb, 0);
+
+	rf = xcalloc(1, st_add(sizeof(*rf),
+			       st_mult(sb.num_lines, sizeof(rf->lines[0]))));
+	rf->nr = sb.num_lines;
+	for (ent = sb.ent; ent; ) {
+		struct blame_entry *next = ent->next;
+		const struct blamed_record *b =
+			blamed_record(a, ent->suspect->commit);
+		const struct provenance_file *file = b ?
+			provenance_record_file(b->rec, ent->suspect->path) :
+			NULL;
+
+		for (int i = 0; file && i < ent->num_lines; i++) {
+			struct restored_line *l = &rf->lines[ent->lno + i];
+
+			l->b = b;
+			l->range = provenance_file_range(file, '+',
+							 ent->s_lno + i + 1);
+			if (l->range &&
+			    l->range->mark == PROVENANCE_MARK_UNKNOWN)
+				l->range = NULL;
+		}
+		blame_origin_decref(ent->suspect);
+		free(ent);
+		ent = next;
+	}
+	strmap_put(&a->restored, path, rf);
+
+	cleanup_scoreboard(&sb);
+	release_revisions(&revs);
+	clear_commit_marks(parent, ALL_REV_FLAGS);
+}
+
+/*
+ * For a revert of `seed`: blame in its first parent each file that it
+ * changes and that the parent has, so that the lines the revert
+ * restores get the owners of the commits that wrote them.  See
+ * restore_owners().
+ */
+static void blame_restored(struct attribution *a, const struct seed *seed)
+{
+	struct commit *c = seed->src->commit;
+	struct strmap changes = STRMAP_INIT;
+	struct hashmap_iter iter;
+	struct strmap_entry *e;
+
+	if (!c->parents)
+		return;
+	collect_changes(a, seed->pre_tree, seed->post_tree, &changes);
+	strmap_for_each_entry(&changes, &iter, e) {
+		const struct change *ch = e->value;
+
+		if (!is_empty_blob_oid(&ch->pre, a->r->hash_algo))
+			blame_path(a, c->parents->item, e->key);
+	}
+	strmap_clear(&changes, 1);
 }
 
 static int add_seeds(struct attribution *a,
@@ -1570,7 +1754,8 @@ static int add_seeds(struct attribution *a,
 		if (!seed->src->lines)
 			collect_changes(a, seed->pre_tree, seed->post_tree,
 					&seed->changes);
-		import_actors(a, seed);
+		else
+			seed->actors = import_actors(a, seed->src->lines);
 		a->seeds_nr++;
 	}
 	return 0;
@@ -1589,9 +1774,15 @@ static int attribution_init(struct attribution *a, struct repository *r,
 	a->r = r;
 	a->journal = journal;
 	a->flags = flags;
+	provenance_cache_init(&a->cache, r);
+	oidmap_init(&a->blamed, 0);
+	strmap_init(&a->restored);
 	CALLOC_ARRAY(a->warned, journal->nr);
 	collect_sessions(a, session);
 	ret = add_seeds(a, sources, nr);
+	/* the blame may declare actors, which come before the human */
+	if (!ret && (flags & PROVENANCE_REWRITE_REVERT))
+		blame_restored(a, &a->seeds[0]);
 	a->human = a->sessions_nr;
 	a->unknown = a->human + 1;
 	a->fallback = (flags & PROVENANCE_REWRITE_ADOPT) ? a->unknown : a->human;
@@ -1599,6 +1790,14 @@ static int attribution_init(struct attribution *a, struct repository *r,
 	if (!ret)
 		collect_intervals(a, base);
 	return ret;
+}
+
+static void free_blamed_record(void *p)
+{
+	struct blamed_record *b = p;
+
+	free(b->actors);
+	free(b);
 }
 
 static void attribution_release(struct attribution *a)
@@ -1621,6 +1820,9 @@ static void attribution_release(struct attribution *a)
 	free(a->intervals);
 	free(a->warned);
 	free(a->rank);
+	strmap_clear(&a->restored, 1);
+	oidmap_clear_with_free(&a->blamed, free_blamed_record);
+	provenance_cache_release(&a->cache);
 }
 
 struct provenance_attribution *
@@ -1767,14 +1969,13 @@ int provenance_attribute_rewrite(struct repository *r,
 	if (!ret) {
 		add_actors(&a, human, lines);
 		/*
-		 * An adopted commit takes only the reasoning of the
-		 * sources it was found to be made from.
+		 * A tentative source gives its reasoning only if the
+		 * commit was found to be made from it.
 		 */
 		for (size_t i = 0; i < nr; i++)
 			if (sources[i].reasoning &&
 			    !(flags & PROVENANCE_REWRITE_REVERT) &&
-			    (!(flags & PROVENANCE_REWRITE_ADOPT) ||
-			     a.seeds[i].contributed))
+			    (!sources[i].tentative || a.seeds[i].contributed))
 				copy_reasoning(sources[i].reasoning, reasoning);
 		add_sessions(&a, session, reasoning);
 	}

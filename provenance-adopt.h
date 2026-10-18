@@ -1,7 +1,7 @@
 #ifndef PROVENANCE_ADOPT_H
 #define PROVENANCE_ADOPT_H
 
-#include "provenance-view.h"
+#include "provenance.h"
 
 struct commit;
 struct repository;

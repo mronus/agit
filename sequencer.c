@@ -2591,6 +2591,11 @@ static enum pick_result do_pick_commit(struct repository *r,
 	    refs_update_ref(get_main_ref_store(the_repository), NULL, "REVERT_HEAD", &commit->object.oid, NULL,
 			    REF_NO_DEREF, UPDATE_REFS_MSG_ON_ERR))
 		res = -1;
+	/* the commit made after --no-commit finds the picks in a file */
+	if (command == TODO_PICK && opts->no_commit &&
+	    (res == 0 || res == 1) && provenance_enabled(r) &&
+	    provenance_picks_append(r, &commit->object.oid))
+		res = -1;
 
 	if (res) {
 		error(command == TODO_REVERT
@@ -5463,6 +5468,36 @@ static int continue_single_pick(struct repository *r, struct replay_opts *opts)
 	return run_command(&cmd);
 }
 
+struct commit *rebase_stopped_fixup(struct repository *r)
+{
+	struct strbuf stopped = STRBUF_INIT, fixups = STRBUF_INIT;
+	struct strbuf amend = STRBUF_INIT;
+	struct object_id oid, head, to_amend;
+	struct commit *commit = NULL;
+	const char *last;
+
+	/*
+	 * Rebase stopped at the last of the current fixups, and HEAD is
+	 * still the commit to amend.
+	 */
+	if (is_directory(rebase_path()) &&
+	    read_oneliner(&fixups, rebase_path_current_fixups(),
+			  READ_ONELINER_SKIP_IF_EMPTY) &&
+	    (last = strrchr(fixups.buf, ' ')) &&
+	    read_oneliner(&stopped, rebase_path_stopped_sha(),
+			  READ_ONELINER_SKIP_IF_EMPTY) &&
+	    !strcmp(last + 1, stopped.buf) &&
+	    !get_oid_hex(stopped.buf, &oid) &&
+	    read_oneliner(&amend, rebase_path_amend(), 0) &&
+	    !get_oid_hex(amend.buf, &to_amend) &&
+	    !repo_get_oid(r, "HEAD", &head) && oideq(&head, &to_amend))
+		commit = lookup_commit(r, &oid);
+	strbuf_release(&stopped);
+	strbuf_release(&fixups);
+	strbuf_release(&amend);
+	return commit;
+}
+
 /*
  * The commit of the "fixup" or "squash" command that rebase stopped at
  * because of conflicts, or NULL if it stopped for another reason.
@@ -5470,20 +5505,7 @@ static int continue_single_pick(struct repository *r, struct replay_opts *opts)
 static struct commit *stopped_fixup(struct repository *r,
 				    struct replay_ctx *ctx)
 {
-	struct strbuf buf = STRBUF_INIT;
-	struct object_id oid;
-	struct commit *commit = NULL;
-	const char *last;
-
-	if (ctx->current_fixup_count &&
-	    read_oneliner(&buf, rebase_path_stopped_sha(),
-			  READ_ONELINER_SKIP_IF_EMPTY) &&
-	    !get_oid_hex(buf.buf, &oid) &&
-	    (last = strrchr(ctx->current_fixups.buf, ' ')) &&
-	    !strcmp(last + 1, buf.buf))
-		commit = lookup_commit(r, &oid);
-	strbuf_release(&buf);
-	return commit;
+	return ctx->current_fixup_count ? rebase_stopped_fixup(r) : NULL;
 }
 
 static int commit_staged_changes(struct repository *r,

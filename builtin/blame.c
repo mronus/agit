@@ -30,7 +30,6 @@
 #include "odb.h"
 #include "pager.h"
 #include "provenance.h"
-#include "provenance-view.h"
 #include "blame.h"
 #include "refs.h"
 #include "setup.h"

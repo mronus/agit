@@ -274,8 +274,13 @@ reasoning record of the picked commit is copied.
 If the picked commit has no line record, as when it was made with a
 Git that does not record them, the lines taken from it and the lines
 it removes are `UNKNOWN`, and a line of a resolution that replaces
-such a line stays `UNKNOWN`.  With `--no-commit`, the commit made afterwards is recorded
-like any other.
+such a line stays `UNKNOWN`.
+
+With `--no-commit`, the picked commits are noted in the git directory,
+and the next commit carries their records as if each had been picked
+in turn (see linkgit:git-commit[1]).  If a picked change has been
+discarded by then, as with `git reset --hard`, that commit's reasoning
+is not attached to the new commit.
 
 SEE ALSO
 --------
