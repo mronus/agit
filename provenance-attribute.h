@@ -35,6 +35,42 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_record *lines,
 			 struct provenance_reasoning *reasoning);
 
+/* A commit whose records seed the attribution of a rewritten commit. */
+struct provenance_source {
+	struct commit *commit;
+	const struct provenance_record *lines;
+	/* NULL if the commit has no reasoning record */
+	const struct provenance_reasoning *reasoning;
+};
+
+/*
+ * As provenance_attribute(), for a commit that rewrites the `nr`
+ * commits in `sources`, carrying their records over to it.  See the
+ * "History rewriting" section of
+ * Documentation/technical/git-provenance.adoc.
+ *
+ * The changes of each source are attributed as its line record says,
+ * before the stamps in `journal`.  All sources but the last are
+ * versions the commit was made from, as the commit being amended is;
+ * the changes of the last one are found in the commit, wherever they
+ * were applied.  If `revert` is set, there must be one source, and
+ * the commit undoes its changes.
+ *
+ * The reasoning record names the sessions of the reasoning records of
+ * the sources, unless `revert` is set, followed by the sessions the
+ * journal attaches to the commit.
+ */
+int provenance_attribute_rewrite(struct repository *r,
+				 struct commit *parent,
+				 const struct object_id *tree,
+				 const struct provenance_source *sources,
+				 size_t nr, int revert,
+				 const struct provenance_journal *journal,
+				 const char *session,
+				 const char *human,
+				 struct provenance_record *lines,
+				 struct provenance_reasoning *reasoning);
+
 /*
  * The attribution walk for one path at a time, as used to show the
  * provenance of changes that are not committed yet.

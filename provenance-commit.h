@@ -1,0 +1,70 @@
+#ifndef PROVENANCE_COMMIT_H
+#define PROVENANCE_COMMIT_H
+
+struct commit;
+struct object_id;
+struct provenance_reasoning;
+struct provenance_record;
+struct ref_transaction;
+struct repository;
+struct strbuf;
+
+/*
+ * The commits that a commit about to be made rewrites.  See the
+ * "History rewriting" section of
+ * Documentation/technical/git-provenance.adoc.
+ */
+struct provenance_rewrite {
+	/*
+	 * The commit that the new one replaces ("commit --amend", and
+	 * the "fixup" and "squash" commands of "rebase"), or NULL.
+	 */
+	struct commit *amend;
+	/*
+	 * The commit whose changes the new one applies again or, with
+	 * `revert`, undoes, or NULL.
+	 */
+	struct commit *pick;
+	unsigned revert : 1;
+};
+
+/*
+ * Compute the records of a commit about to be made in `r`, with the
+ * tree `tree`, the first parent `parent` (NULL for a root commit) and
+ * the author `author` (as in a commit object), from the journal of the
+ * worktree, as "git commit" does.  If `rw` is not NULL, the records of
+ * the commits it names are carried over.  `session` is as for
+ * provenance_attribute().
+ *
+ * Returns 1 if the commit gets the records, which are stored in
+ * `lines` and `reasoning` as by provenance_attribute(), and 0 if it
+ * gets none: a commit that applies or undoes the changes of other
+ * commits gets no records if none of them has a line record.  A line
+ * record that cannot be parsed is ignored with a warning.  Returns -1
+ * after reporting an error.  The journal is left alone.
+ */
+int provenance_commit_records(struct repository *r,
+			      struct commit *parent,
+			      const struct object_id *tree,
+			      const char *author,
+			      const char *session,
+			      const struct provenance_rewrite *rw,
+			      struct provenance_record *lines,
+			      struct provenance_reasoning *reasoning);
+
+/*
+ * Write `lines` and `reasoning` as the records of `commit`, filling in
+ * their commit ids, and queue the updates of the provenance refs into
+ * `transaction`, with the reflog message `reflog_msg`.  The reasoning
+ * record is only written if it names a session.  Returns 0 on success,
+ * or -1 with a message in `err`.
+ */
+int provenance_queue_records(struct repository *r,
+			     struct ref_transaction *transaction,
+			     const struct object_id *commit,
+			     struct provenance_record *lines,
+			     struct provenance_reasoning *reasoning,
+			     const char *reflog_msg,
+			     struct strbuf *err);
+
+#endif /* PROVENANCE_COMMIT_H */

@@ -23,7 +23,11 @@ commit was made.  Records are stored as notes under
 commit they describe, so a commit can carry provenance without its
 object id changing.  See
 `Documentation/technical/git-provenance-format.adoc` for the record
-formats.
+formats.  linkgit:git-commit[1] writes the records of each commit it
+makes, and `git commit --amend`, linkgit:git-cherry-pick[1],
+linkgit:git-revert[1] and linkgit:git-rebase[1] carry the records of
+the commits they rewrite over to the commits they make (see their
+PROVENANCE sections).
 
 This command reads and checks records.  It does not create them; see
 linkgit:git-notes[1] for a way to attach a record by hand.

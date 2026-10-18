@@ -41,6 +41,9 @@
 #include "pager.h"
 #include "path.h"
 #include "pretty.h"
+#include "provenance.h"
+#include "provenance-commit.h"
+#include "provenance-journal.h"
 
 /**
  * Returns the length of the first line of msg.
@@ -1670,6 +1673,12 @@ static void do_commit(const struct am_state *state)
 	struct commit_list *parents = NULL;
 	const char *reflog_msg, *author, *committer = NULL;
 	struct strbuf sb = STRBUF_INIT;
+	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
+	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	int record_provenance = state->rebasing &&
+				!is_null_oid(&state->orig_commit) &&
+				provenance_enabled(the_repository);
+	int have_provenance = 0;
 
 	if (!state->no_verify && run_hooks(the_repository, "pre-applypatch"))
 		exit(1);
@@ -1706,6 +1715,23 @@ static void do_commit(const struct am_state *state)
 				 NULL))
 		die(_("failed to write commit object"));
 
+	/* When rebasing, the patch comes from a commit with its records. */
+	if (record_provenance) {
+		struct provenance_rewrite rw = {
+			.pick = lookup_commit_reference(the_repository,
+							&state->orig_commit),
+		};
+
+		if (!rw.pick)
+			die(_("could not parse commit %s"),
+			    oid_to_hex(&state->orig_commit));
+		have_provenance = provenance_commit_records(the_repository,
+				parents ? parents->item : NULL, &tree, author,
+				NULL, &rw, &prov_lines, &prov_reasoning);
+		if (have_provenance < 0)
+			die(_("unable to record provenance"));
+	}
+
 	reflog_msg = getenv("GIT_REFLOG_ACTION");
 	if (!reflog_msg)
 		reflog_msg = "am";
@@ -1713,9 +1739,32 @@ static void do_commit(const struct am_state *state)
 	strbuf_addf(&sb, "%s: %.*s", reflog_msg, linelen(state->msg),
 			state->msg);
 
-	refs_update_ref(get_main_ref_store(the_repository), sb.buf, "HEAD",
-			&commit, old_oid, 0,
-			UPDATE_REFS_DIE_ON_ERR);
+	if (have_provenance) {
+		/* Move HEAD and the provenance refs together. */
+		struct ref_store *refs = get_main_ref_store(the_repository);
+		struct ref_transaction *transaction;
+		struct strbuf err = STRBUF_INIT;
+
+		transaction = ref_store_transaction_begin(refs, 0, &err);
+		if (!transaction ||
+		    ref_transaction_update(transaction, "HEAD", &commit, old_oid,
+					   NULL, NULL, 0, sb.buf, &err) ||
+		    provenance_queue_records(the_repository, transaction,
+					     &commit, &prov_lines,
+					     &prov_reasoning, reflog_msg, &err) ||
+		    ref_transaction_commit(transaction, &err))
+			die("%s", err.buf);
+		ref_transaction_free(transaction);
+		strbuf_release(&err);
+	} else {
+		refs_update_ref(get_main_ref_store(the_repository), sb.buf,
+				"HEAD", &commit, old_oid, 0,
+				UPDATE_REFS_DIE_ON_ERR);
+	}
+
+	/* The commit has consumed the journal, as a full commit does. */
+	if (record_provenance && provenance_journal_clear(the_repository))
+		warning_errno(_("unable to clear the provenance journal"));
 
 	if (state->rebasing) {
 		FILE *fp = xfopen(am_path(state, "rewritten"), "a");
@@ -1728,6 +1777,8 @@ static void do_commit(const struct am_state *state)
 
 	run_hooks(the_repository, "post-applypatch");
 
+	provenance_record_release(&prov_lines);
+	provenance_reasoning_release(&prov_reasoning);
 	commit_list_free(parents);
 	strbuf_release(&sb);
 }

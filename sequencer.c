@@ -39,6 +39,9 @@
 #include "wt-status.h"
 #include "hashmap.h"
 #include "notes-utils.h"
+#include "provenance.h"
+#include "provenance-commit.h"
+#include "provenance-journal.h"
 #include "sigchain.h"
 #include "unpack-trees.h"
 #include "oidmap.h"
@@ -1150,7 +1153,8 @@ static void disable_auto_maintenance(struct replay_opts *opts,
 static int run_git_commit(const char *defmsg,
 			  const char *reflog_action,
 			  struct replay_opts *opts,
-			  unsigned int flags)
+			  unsigned int flags,
+			  const struct provenance_rewrite *rw)
 {
 	struct child_process cmd = CHILD_PROCESS_INIT;
 
@@ -1206,6 +1210,11 @@ static int run_git_commit(const char *defmsg,
 
 	if (!(flags & EDIT_MSG))
 		strvec_push(&cmd.args, "--allow-empty-message");
+
+	if (rw && rw->pick)
+		strvec_pushf(&cmd.args, "--provenance-%s=%s",
+			     rw->revert ? "revert" : "pick",
+			     oid_to_hex(&rw->pick->object.oid));
 
 	if (is_rebase_i(opts) && !(flags & EDIT_MSG))
 		return run_command_silent_on_success(&cmd);
@@ -1313,27 +1322,6 @@ int queue_head_update_with_reflog(struct ref_transaction *transaction,
 				     old_head ? &old_head->object.oid : null_oid(the_hash_algo),
 				     NULL, NULL, 0, sb.buf, err) ? -1 : 0;
 	strbuf_release(&sb);
-
-	return ret;
-}
-
-int update_head_with_reflog(const struct commit *old_head,
-			    const struct object_id *new_head,
-			    const char *action, const struct strbuf *msg,
-			    struct strbuf *err)
-{
-	struct ref_transaction *transaction;
-	int ret = 0;
-
-	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
-						  0, err);
-	if (!transaction ||
-	    queue_head_update_with_reflog(transaction, old_head, new_head,
-					  action, msg, err) ||
-	    ref_transaction_commit(transaction, err)) {
-		ret = -1;
-	}
-	ref_transaction_free(transaction);
 
 	return ret;
 }
@@ -1574,6 +1562,7 @@ static int try_to_commit(struct repository *r,
 			 struct strbuf *msg, const char *author,
 			 const char *reflog_action,
 			 struct replay_opts *opts, unsigned int flags,
+			 const struct provenance_rewrite *rw,
 			 struct object_id *oid)
 {
 	struct object_id tree;
@@ -1582,6 +1571,10 @@ static int try_to_commit(struct repository *r,
 	struct commit_extra_header *extra = NULL;
 	struct strbuf err = STRBUF_INIT;
 	struct strbuf commit_msg = STRBUF_INIT;
+	struct ref_transaction *transaction;
+	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
+	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	int record_provenance = provenance_enabled(r), have_provenance = 0;
 	char *amend_author = NULL;
 	const char *committer = NULL;
 	const char *hook_commit = NULL;
@@ -1732,17 +1725,50 @@ static int try_to_commit(struct repository *r,
 		goto out;
 	}
 
-	if (update_head_with_reflog(current_head, oid, reflog_action,
-				    msg, &err)) {
+	/* not before: git_author_info() may reuse the buffer of `committer` */
+	if (record_provenance) {
+		struct provenance_rewrite prov_rw = { 0 };
+
+		if (rw)
+			prov_rw = *rw;
+		if (flags & AMEND_MSG)
+			prov_rw.amend = current_head;
+		have_provenance = provenance_commit_records(r,
+				parents ? parents->item : NULL, &tree,
+				author ? author : git_author_info(IDENT_STRICT),
+				NULL, &prov_rw, &prov_lines, &prov_reasoning);
+		if (have_provenance < 0) {
+			res = error(_("unable to record provenance"));
+			goto out;
+		}
+	}
+
+	/* Move HEAD and the provenance refs together, or not at all. */
+	transaction = ref_store_transaction_begin(get_main_ref_store(r), 0, &err);
+	if (!transaction ||
+	    queue_head_update_with_reflog(transaction, current_head, oid,
+					  reflog_action, msg, &err) ||
+	    (have_provenance &&
+	     provenance_queue_records(r, transaction, oid, &prov_lines,
+				      &prov_reasoning, reflog_action, &err)) ||
+	    ref_transaction_commit(transaction, &err)) {
+		ref_transaction_free(transaction);
 		res = error("%s", err.buf);
 		goto out;
 	}
+	ref_transaction_free(transaction);
+
+	/* The commit has consumed the journal, as a full commit does. */
+	if (record_provenance && provenance_journal_clear(r))
+		warning_errno(_("unable to clear the provenance journal"));
 
 	run_commit_hook(0, r->index_file, NULL, "post-commit", NULL);
 	if (flags & AMEND_MSG)
 		commit_post_rewrite(r, current_head, oid);
 
 out:
+	provenance_record_release(&prov_lines);
+	provenance_reasoning_release(&prov_reasoning);
 	free_commit_extra_headers(extra);
 	commit_list_free(parents);
 	strbuf_release(&err);
@@ -1765,6 +1791,7 @@ static int do_commit(struct repository *r,
 		     const char *msg_file, const char *author,
 		     const char *reflog_action,
 		     struct replay_opts *opts, unsigned int flags,
+		     const struct provenance_rewrite *rw,
 		     struct object_id *oid)
 {
 	int res = 1;
@@ -1779,7 +1806,8 @@ static int do_commit(struct repository *r,
 					   msg_file);
 
 		res = try_to_commit(r, msg_file ? &sb : NULL,
-				    author, reflog_action, opts, flags, &oid);
+				    author, reflog_action, opts, flags, rw,
+				    &oid);
 		strbuf_release(&sb);
 		if (!res) {
 			refs_delete_ref(get_main_ref_store(r), "",
@@ -1795,7 +1823,7 @@ static int do_commit(struct repository *r,
 		if (is_rebase_i(opts) && oid)
 			if (write_rebase_head(oid))
 			    return -1;
-		return run_git_commit(msg_file, reflog_action, opts, flags);
+		return run_git_commit(msg_file, reflog_action, opts, flags, rw);
 	}
 
 	return res;
@@ -2344,6 +2372,7 @@ static enum pick_result do_pick_commit(struct repository *r,
 	const char *base_label, *next_label, *reflog_action;
 	char *author = NULL;
 	struct commit_message msg = { NULL, NULL, NULL, NULL };
+	struct provenance_rewrite rw = { 0 };
 	int res, unborn = 0, reword = 0, allow, drop_commit = 0;
 	enum todo_command command = item->command;
 	struct commit *commit = item->commit;
@@ -2592,9 +2621,11 @@ static enum pick_result do_pick_commit(struct repository *r,
 			oid_to_hex(&commit->object.oid), msg.subject);
 	} /* else allow == 0 and there's nothing special to do */
 	if (!opts->no_commit && !drop_commit) {
+		rw.pick = commit;
+		rw.revert = command == TODO_REVERT;
 		if (author || command == TODO_REVERT || (flags & AMEND_MSG))
 			res = do_commit(r, msg_file, author, reflog_action,
-					opts, flags,
+					opts, flags, &rw,
 					commit? &commit->object.oid : NULL);
 		else
 			res = error(_("unable to parse commit author"));
@@ -2609,7 +2640,8 @@ fast_forward_edit:
 			 * got here.
 			 */
 			flags = EDIT_MSG | VERIFY_MSG | AMEND_MSG | ALLOW_EMPTY;
-			res = run_git_commit(NULL, reflog_action, opts, flags);
+			res = run_git_commit(NULL, reflog_action, opts, flags,
+					     NULL);
 			*check_todo = 1;
 		}
 		/*
@@ -4510,14 +4542,14 @@ static int do_merge(struct repository *r,
 		 * command needs to be rescheduled).
 		 */
 		ret = !!run_git_commit(git_path_merge_msg(r), reflog_action,
-				       opts, run_commit_flags);
+				       opts, run_commit_flags, NULL);
 
 	if (!ret && flags & TODO_EDIT_MERGE_MSG) {
 	fast_forward_edit:
 		*check_todo = 1;
 		run_commit_flags |= AMEND_MSG | EDIT_MSG | VERIFY_MSG;
 		ret = !!run_git_commit(NULL, reflog_action, opts,
-				       run_commit_flags);
+				       run_commit_flags, NULL);
 	}
 
 
@@ -5432,6 +5464,29 @@ static int continue_single_pick(struct repository *r, struct replay_opts *opts)
 	return run_command(&cmd);
 }
 
+/*
+ * The commit of the "fixup" or "squash" command that rebase stopped at
+ * because of conflicts, or NULL if it stopped for another reason.
+ */
+static struct commit *stopped_fixup(struct repository *r,
+				    struct replay_ctx *ctx)
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct object_id oid;
+	struct commit *commit = NULL;
+	const char *last;
+
+	if (ctx->current_fixup_count &&
+	    read_oneliner(&buf, rebase_path_stopped_sha(),
+			  READ_ONELINER_SKIP_IF_EMPTY) &&
+	    !get_oid_hex(buf.buf, &oid) &&
+	    (last = strrchr(ctx->current_fixups.buf, ' ')) &&
+	    !strcmp(last + 1, buf.buf))
+		commit = lookup_commit(r, &oid);
+	strbuf_release(&buf);
+	return commit;
+}
+
 static int commit_staged_changes(struct repository *r,
 				 struct replay_opts *opts,
 				 struct todo_list *todo_list)
@@ -5439,6 +5494,7 @@ static int commit_staged_changes(struct repository *r,
 	struct replay_ctx *ctx = opts->ctx;
 	unsigned int flags = ALLOW_EMPTY | EDIT_MSG;
 	unsigned int final_fixup = 0, is_clean;
+	struct provenance_rewrite rw = { 0 };
 	struct strbuf rev = STRBUF_INIT;
 	const char *reflog_action = reflog_message(opts, "continue", NULL);
 	int ret;
@@ -5582,6 +5638,8 @@ static int commit_staged_changes(struct repository *r,
 		}
 
 		flags |= AMEND_MSG;
+		if (!is_clean)
+			rw.pick = stopped_fixup(r, ctx);
 	}
 
 	if (is_clean) {
@@ -5606,7 +5664,7 @@ static int commit_staged_changes(struct repository *r,
 	}
 
 	if (run_git_commit(final_fixup ? NULL : rebase_path_message(),
-			   reflog_action, opts, flags)) {
+			   reflog_action, opts, flags, &rw)) {
 		ret = error(_("could not commit staged changes."));
 		goto out;
 	}

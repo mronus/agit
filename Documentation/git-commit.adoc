@@ -562,6 +562,32 @@ the title on the Subject line and the rest of the commit in the body.
 
 include::i18n.adoc[]
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), `git commit` records which lines of the
+commit were written by an AI agent, by a human, or by both, from the
+stamps of the capture journal (see linkgit:git-stamp[1]), and the
+reasoning of the agent sessions involved (see
+linkgit:git-provenance[1]).
+
+With `--amend`, the records of the amended commit are carried over:
+lines that the amendment leaves alone keep their marks, lines it
+changes belong to the agent session whose stamps changed them or to
+the human, and an AI line edited by the human becomes `MIXED`.  The
+reasoning names the sessions of the amended commit, followed by those
+that the journal attaches, with their summaries in that order.  An
+amended commit without records, made with a Git that does not record
+them, gets new ones.
+
+A commit that concludes a cherry-pick, a revert or a rebase that
+stopped with conflicts carries the records of the commit being picked
+or reverted, as linkgit:git-cherry-pick[1] and linkgit:git-revert[1]
+describe.  If that commit has no line record, neither does the new
+one.
+
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------
 The editor used to edit the commit log message will be chosen from the

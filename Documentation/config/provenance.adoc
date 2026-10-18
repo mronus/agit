@@ -4,9 +4,12 @@ provenance.enabled::
 	human, or by both, attributed from the stamps that agents make
 	with linkgit:git-stamp[1], and the reasoning of the agent
 	sessions involved.  The records are stored under
-	`refs/provenance/lines` and `refs/provenance/reasoning`.  If
-	false, `git commit` neither records provenance nor reads the
-	journal of stamps, and linkgit:git-fetch[1],
+	`refs/provenance/lines` and `refs/provenance/reasoning`.
+	`git commit --amend`, linkgit:git-cherry-pick[1],
+	linkgit:git-revert[1] and linkgit:git-rebase[1] carry the
+	records of the commits they rewrite over to the commits they
+	make.  If false, none of these commands records provenance or
+	reads the journal of stamps, and linkgit:git-fetch[1],
 	linkgit:git-push[1] and linkgit:git-clone[1] do not transfer
 	the provenance refs.  Defaults to true.
 
@@ -31,5 +34,8 @@ provenance.reasoning.push::
 provenance.require::
 	If true, linkgit:git-commit[1] refuses to make a commit that no
 	AI agent session is linked to: a commit made without `--session`
-	in which no line is attributed to a session.  Has no effect if
-	`provenance.enabled` is false.  Defaults to false.
+	in which no line is attributed to a session.  A commit that
+	picks or reverts another, as linkgit:git-cherry-pick[1],
+	linkgit:git-revert[1] and linkgit:git-rebase[1] make, is not
+	refused.  Has no effect if `provenance.enabled` is false.
+	Defaults to false.

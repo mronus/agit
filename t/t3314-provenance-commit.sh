@@ -453,13 +453,19 @@ test_expect_success 'provenance.enabled=false leaves the journal alone' '
 	rm .git/provenance/journal
 '
 
-test_expect_success '--amend records against the new parent' '
+test_expect_success '--amend carries the records of the amended commit over' '
+	git stamp begin --session s13 &&
 	echo 16 >>file &&
-	git commit -a -m to-amend &&
+	git stamp end --session s13 &&
+	git commit -a -m to-amend --session s13 &&
 	git provenance show HEAD >before &&
+	git provenance show --reasoning HEAD >before-reasoning &&
 	git commit --amend -m amended &&
 	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" before >expect &&
 	check_lines HEAD &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" \
+		before-reasoning >expect &&
+	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
