@@ -72,6 +72,11 @@ file (see linkgit:git-blame[1]), and the `%(provenance:<field>)`
 placeholders of the pretty formats show the summary, the AI share,
 the models and the sessions of a commit (see linkgit:git-log[1]).
 
+`git fetch`, `git pull`, `git clone` and `git push` transfer the
+records along with the branches and merge the records of a remote
+into the local ones (see the PROVENANCE sections of
+linkgit:git-fetch[1] and linkgit:git-push[1]).
+
 GIT
 ---
 Part of the linkgit:git[1] suite

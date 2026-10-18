@@ -387,6 +387,17 @@ _<directory>_::
 :git-clone: 1
 include::urls.adoc[]
 
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), the clone also fetches the provenance refs of
+the remote into `refs/provenance/remotes/<name>/` and creates the
+local `refs/provenance/lines` and `refs/provenance/reasoning` from
+them, as linkgit:git-fetch[1] does (see its PROVENANCE section); no
+refspec is written to the configuration for them.  With `--mirror`,
+the provenance refs are copied as they are, like every other ref.
+
 EXAMPLES
 --------
 

@@ -191,6 +191,40 @@ $ git fetch <url-of-origin> --prune --prune-tags
 $ git fetch <url-of-origin> --prune 'refs/tags/*:refs/tags/*'
 ------------------------------------------------
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), fetching from a configured remote _<name>_
+also fetches its provenance refs, whether the refspecs come from
+`remote.<name>.fetch` or from the command line: `refs/provenance/lines`
+is stored in `refs/provenance/remotes/<name>/lines` and, unless
+`provenance.reasoning.fetch` is `never`, `refs/provenance/reasoning` in
+`refs/provenance/remotes/<name>/reasoning`.  As if they were
+
+------------------------------------------------
++refs/provenance/lines:refs/provenance/remotes/<name>/lines
++refs/provenance/reasoning:refs/provenance/remotes/<name>/reasoning
+------------------------------------------------
+
+were added to the refspecs, but nothing is written to the
+configuration, a remote without provenance refs is not an error, and
+the refs are not written to `FETCH_HEAD`.  A provenance ref that the
+refspecs already map, as the `+refs/*:refs/*` refspec of a mirror
+does, is fetched as they say instead.  Nothing is added when fetching
+from a URL or with `--prefetch`.  `--prune` deletes the tracking refs
+of provenance refs that the remote no longer has.
+
+Each tracking ref that the fetch updated is then merged into the local
+`refs/provenance/lines` or `refs/provenance/reasoning`: the local ref
+is created if it does not exist, left alone if it already contains the
+fetched records, and fast-forwarded if it is an ancestor of them.
+Otherwise a merge commit is made whose tree has the records of both
+sides; if both sides changed the record of the same commit, the local
+one is kept and a warning names the commit.  With `--verbose`, each
+merged ref is reported.  `--dry-run` merges nothing.
+
 OUTPUT
 ------
 

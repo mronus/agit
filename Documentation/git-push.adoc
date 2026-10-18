@@ -495,6 +495,32 @@ set of options and arguments, then `git push all-remotes` will fail in
 the same way when it reaches r1. The group push does not do anything
 special to make a failing individual push succeed.
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]) and a push to a configured remote updates at
+least one branch, the local provenance refs are pushed in the same
+push, as if `refs/provenance/lines:refs/provenance/lines` and, unless
+`provenance.reasoning.push` is `never`,
+`refs/provenance/reasoning:refs/provenance/reasoning` were added to
+the refspecs.  A provenance ref is left out if it does not exist
+locally or the refspecs already name it.  Nothing is added when
+pushing to a URL, with `--mirror` (which pushes the refs anyway), with
+`--prune` or `--delete`, or when no branch is pushed, as with `--tags`
+alone.  The provenance refs are forced only with `--force`;
+`--force-with-lease` does not apply to them, and when it is given
+without a ref they are pushed separately, without a lease.
+
+If the remote rejects a provenance ref because it moved, `git push`
+fetches the provenance refs of the remote, merges them into the local
+ones as linkgit:git-fetch[1] does (see its PROVENANCE section), and
+pushes them once more (with `--atomic`, everything is pushed again).
+If they are rejected again, the push fails; `git fetch <name>` merges
+the provenance refs of the remote, after which the push can be
+retried.
+
 OUTPUT
 ------
 

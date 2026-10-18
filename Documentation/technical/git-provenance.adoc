@@ -506,19 +506,76 @@ The resulting record is marked `adopted`.
 
 Transfer
 ~~~~~~~~
-The extension adds `refs/provenance/lines` to the default fetch
-refspecs and, by default (`provenance.reasoning.fetch`),
-`refs/provenance/reasoning` as well. After fetching, the remote record
-tree is merged into the local one. Keys are disjoint commit ids, so
-the merge is almost always a trivial union, as the `cat_sort_uniq`
-strategy in `notes-merge.c` does. `push` pushes the provenance refs
-with the branches and, if the remote ref moved, fetches, merges and
-retries. Stock Git users can fetch the refs with an explicit refspec;
-nothing on the wire changes.
+The provenance refs of a remote are fetched into tracking refs, as
+branches are fetched into remote-tracking branches:
+`refs/provenance/lines` of the remote `origin` lands in
+`refs/provenance/remotes/origin/lines`, and likewise for
+`refs/provenance/reasoning`. They are not under `refs/remotes/origin/`,
+where they would show up as remote branches.
+
+The refspecs are implicit. `fetch` from a configured remote (and so
+`pull`, `fetch --all` and `remote update`) adds
+
+....
++refs/provenance/lines:refs/provenance/remotes/<name>/lines
++refs/provenance/reasoning:refs/provenance/remotes/<name>/reasoning
+....
+
+to the refspecs it uses, whether they come from the configuration or
+from the command line, and `clone` adds them to its initial fetch.
+Nothing is written to `remote.<name>.fetch`, so existing clones need
+no conversion and `provenance.enabled=false` turns transfer off
+entirely. A remote without provenance refs is not an error; the refs
+are not written to `FETCH_HEAD`; `--prune` prunes their tracking refs.
+Nothing is added for a URL, for `--prefetch`, or for a provenance ref
+that the refspecs already map, which covers the `+refs/*:refs/*` of
+`clone --mirror`.
+
+After a fetch that updated a tracking ref, the tracking ref is merged
+into the local ref, through a ref transaction:
+
+1. If the local ref does not exist, it is created at the fetched
+   commit. If the fetched commit is an ancestor of the local ref,
+   nothing happens; if the local ref is an ancestor of the fetched
+   commit, it is fast-forwarded.
+
+2. Otherwise a merge commit is made, with the local and the fetched
+   commit as parents, so that later fetches and pushes are
+   fast-forwards. Its tree is a three-way merge of the notes trees
+   against their merge base: a record that only one side added,
+   changed or removed takes that side's version. Keys are disjoint
+   commit ids, so this is almost always a plain union.
+
+3. A record that both sides changed differently keeps the local
+   version, with a warning naming the commit. Records are not
+   concatenated, as the `cat_sort_uniq` strategy of `notes-merge.c`
+   would do, because the result would not parse. If the two sides
+   share no history, as in a shallow clone, the merge is a union with
+   the same rule.
+
+The merge is written on top of `notes.c` in `provenance-transfer.c`
+rather than through `notes_merge()`, whose `ours` strategy resolves
+conflicts without reporting them and which prints its progress to
+standard output.
+
+`push` to a configured remote pushes the local provenance refs in the
+same push as the branches, when it pushes at least one branch and the
+local refs exist: not for a URL, `--mirror` (which pushes them
+anyway), `--delete`, `--prune` or `--tags` alone. They are forced only
+with `--force`. If the remote rejects a provenance ref because it
+moved, `push` runs `git fetch` for the rejected refs, which merges
+them as above, and pushes the provenance refs once more; if that is
+rejected too, the push fails with a hint to run `git fetch <name>`.
+
+Stock Git users can fetch the refs with an explicit refspec, and stock
+servers and hosting services need nothing: nothing on the wire
+changes.
 
 `provenance.reasoning.fetch` and `provenance.reasoning.push` take
-`always`, `ondemand` (structure now, blobs lazily through partial
-clone) or `never`. Size is controlled where the data is written, by
+`always` (the default) or `never`. A third value, `ondemand`
+(structure now, blobs lazily through partial clone), is reserved: it
+needs partial-clone support for reasoning blobs and is rejected until
+then. Size is controlled where the data is written, by
 `provenance.reasoning.transcripts`.
 
 Shallow clones, bundles and partial clones need no changes to carry
