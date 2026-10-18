@@ -87,6 +87,7 @@ int provenance_commit_records(struct repository *r,
 	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
 	struct ident_split ident;
 	size_t nr = 0;
+	unsigned flags = 0;
 	char *human = NULL;
 	int ret = 0;
 
@@ -120,9 +121,13 @@ int provenance_commit_records(struct repository *r,
 			(int)(ident.name_end - ident.name_begin), ident.name_begin,
 			(int)(ident.mail_end - ident.mail_begin), ident.mail_begin);
 
+	if (rw && rw->amend)
+		flags |= PROVENANCE_REWRITE_AMEND;
+	if (rw && rw->revert)
+		flags |= PROVENANCE_REWRITE_REVERT;
 	if (provenance_journal_read(r, &journal) ||
 	    provenance_attribute_rewrite(r, parent, tree, sources, nr,
-					 rw && rw->revert, &journal, session,
+					 flags, &journal, session,
 					 human, lines, reasoning))
 		ret = -1;
 

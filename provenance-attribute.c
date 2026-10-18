@@ -97,6 +97,8 @@ struct seed {
 	int *actors;
 	/* without a line record: the paths it changes, -> struct change */
 	struct strmap changes;
+	/* a line of the commit takes its owners from the source */
+	unsigned contributed : 1;
 };
 
 struct attribution {
@@ -105,13 +107,15 @@ struct attribution {
 
 	struct seed *seeds;
 	size_t seeds_nr;
-	/* the commit undoes the changes of its only source */
-	int revert;
+	/* PROVENANCE_REWRITE_* */
+	unsigned flags;
 
 	struct session_info *sessions;
 	size_t sessions_nr, sessions_alloc;
 	/* the actor indices of the human and of an unknown origin */
 	int human, unknown;
+	/* the actor index of the lines that nobody is known to own */
+	int fallback;
 
 	struct owner_set *sets;
 	size_t sets_nr, sets_alloc;
@@ -515,6 +519,12 @@ struct step {
 	 */
 	const int *seed;
 	const int *pre_seed;
+	/*
+	 * If not NULL, per line of `seed` and `pre_seed`: the index of the
+	 * source the owners come from, or -1.
+	 */
+	const int *from;
+	const int *pre_from;
 	const struct line_owner *old;
 	struct line_owner *new;
 	int *deleted;
@@ -527,18 +537,47 @@ static void step_unchanged(struct step *st, long until_a)
 		st->new[st->pos_b++] = st->old[st->pos_a++];
 }
 
+/* Whether the set `set` stands for an unknown origin. */
+static int is_unknown(struct attribution *a, int set)
+{
+	const struct owner_set *s = &a->sets[set];
+
+	/* the unknown origin has the highest index */
+	return s->actors[s->nr - 1] == a->unknown;
+}
+
+/*
+ * Note that a line of the commit takes the set `set` from the source
+ * `from[i]`, if there is one; the lines it gives an unknown origin do
+ * not count.
+ */
+static void contribute(struct attribution *a, const int *from, size_t i,
+		       int set)
+{
+	if (from && from[i] >= 0 && !is_unknown(a, set))
+		a->seeds[from[i]].contributed = 1;
+}
+
 static void step_delete(struct step *st, const struct line_owner *o)
 {
 	if (o->set != BASELINE)
 		return;
-	st->deleted[o->base - 1] = st->pre_seed ? st->pre_seed[o->base - 1] :
-				   singleton(st->a, st->actor);
+	if (st->pre_seed) {
+		st->deleted[o->base - 1] = st->pre_seed[o->base - 1];
+		contribute(st->a, st->pre_from, o->base - 1,
+			   st->pre_seed[o->base - 1]);
+	} else {
+		st->deleted[o->base - 1] = singleton(st->a, st->actor);
+	}
 }
 
 /* The owner of the line `b` of the new version, which the step changes. */
 static int step_owner(struct step *st, long b)
 {
-	return st->seed ? st->seed[b] : singleton(st->a, st->actor);
+	if (!st->seed)
+		return singleton(st->a, st->actor);
+	contribute(st->a, st->from, b, st->seed[b]);
+	return st->seed[b];
 }
 
 /* Return the set `set` with the actors of the set `other` added. */
@@ -568,6 +607,8 @@ static int step_hunk(long start_a, long count_a,
 			n->set = step_owner(st, start_b + i);
 		} else if (st->seed) {
 			n->set = set_union(st->a, o->set, st->seed[start_b + i]);
+			contribute(st->a, st->from, start_b + i,
+				   st->seed[start_b + i]);
 		} else {
 			n->set = set_add(st->a, o->set, st->actor);
 		}
@@ -600,18 +641,22 @@ static int diff_hunks(mmfile_t *file_a, mmfile_t *file_b,
  * `content`, made by `actor`: lines the step leaves alone keep their
  * owners, lines it changes gain `actor`, and lines it adds belong to
  * `actor` alone.  With `seed` and `pre_seed` (see struct step), the
- * owners they give take the place of `actor`.  Takes ownership of
- * `content`.
+ * owners they give take the place of `actor`, and the sources named by
+ * `from` and `pre_from` are marked as contributing.  Takes ownership
+ * of `content`.
  */
 static int step_seeded(struct attribution *a, struct file_state *fs,
 		       mmfile_t content, const struct object_id *next,
-		       int actor, const int *seed, const int *pre_seed)
+		       int actor, const int *seed, const int *pre_seed,
+		       const int *from, const int *pre_from)
 {
 	struct step st = {
 		.a = a,
 		.actor = actor,
 		.seed = seed,
 		.pre_seed = pre_seed,
+		.from = from,
+		.pre_from = pre_from,
 		.old = fs->owners,
 		.deleted = fs->deleted,
 	};
@@ -643,7 +688,7 @@ static int step_seeded(struct attribution *a, struct file_state *fs,
 static int step_to(struct attribution *a, struct file_state *fs,
 		   mmfile_t content, const struct object_id *next, int actor)
 {
-	return step_seeded(a, fs, content, next, actor, NULL, NULL);
+	return step_seeded(a, fs, content, next, actor, NULL, NULL, NULL, NULL);
 }
 
 /* As step_to(), with the content of the blob `next`. */
@@ -804,17 +849,17 @@ struct transplant {
 	struct attribution *a;
 	const int *from;
 	int *to;
+	char *kept;
 	long pos_a, pos_b;
 };
 
 static void transplant_unchanged(struct transplant *t, long until_a)
 {
-	int human = singleton(t->a, t->a->human);
-
 	while (t->pos_a < until_a) {
 		int set = t->from[t->pos_a++];
 
-		t->to[t->pos_b++] = set < 0 ? human : set;
+		t->kept[t->pos_b] = set >= 0;
+		t->to[t->pos_b++] = set;
 	}
 }
 
@@ -823,7 +868,6 @@ static int transplant_hunk(long start_a, long count_a,
 {
 	struct transplant *t = data;
 	struct attribution *a = t->a;
-	int human = singleton(a, a->human);
 
 	transplant_unchanged(t, start_a);
 	if (t->pos_b != start_b)
@@ -831,7 +875,8 @@ static int transplant_hunk(long start_a, long count_a,
 	for (long i = 0; i < count_b; i++) {
 		int set = i < count_a ? t->from[start_a + i] : -1;
 
-		t->to[start_b + i] = set < 0 ? human : set_add(a, set, a->human);
+		t->kept[start_b + i] = 0;
+		t->to[start_b + i] = set < 0 ? -1 : set_add(a, set, a->fallback);
 	}
 	t->pos_a = start_a + count_a;
 	t->pos_b = start_b + count_b;
@@ -840,26 +885,31 @@ static int transplant_hunk(long start_a, long count_a,
 
 /*
  * Who owns each line of `to`, if `from` is owned as `sets` says (-1
- * for a line nobody is known to own) and the human made `to` from it:
- * a line kept keeps its owner, a line that replaces one gains the
- * human, and every other line is the human's.  Returns NULL if the
- * versions cannot be compared.
+ * for a line nobody is known to own) and `to` was made from it: a
+ * line kept keeps its owner, a line that replaces one gains the
+ * fallback owner, and nobody is known to own any other line (-1).
+ * `*kept` is set to say, per line of `to`, whether it is kept from a
+ * line with an owner.  Returns NULL if the versions cannot be
+ * compared.
  */
 static int *transplant(struct attribution *a, mmfile_t *from,
-		       const int *sets, mmfile_t *to)
+		       const int *sets, mmfile_t *to, char **kept)
 {
 	struct transplant t = { .a = a, .from = sets };
 	size_t nr = count_lines(to);
 
 	ALLOC_ARRAY(t.to, nr);
+	ALLOC_ARRAY(t.kept, nr);
 	if (diff_hunks(from, to, transplant_hunk, &t)) {
 		free(t.to);
+		free(t.kept);
 		return NULL;
 	}
 	transplant_unchanged(&t, count_lines(from));
 	if ((size_t)t.pos_b != nr)
 		BUG("provenance: transplant produced %ld lines, expected %"PRIuMAX,
 		    t.pos_b, (uintmax_t)nr);
+	*kept = t.kept;
 	return t.to;
 }
 
@@ -871,58 +921,101 @@ static int has_seed(struct attribution *a, const char *path)
 	return 0;
 }
 
-/*
- * Move the file, which is at its version in the first parent, through
- * the changes of each source of a rewrite whose line record has a
- * block for it, or, for a source without a line record, that changes
- * it.  The changes of a source are those from the pre-image of its
- * record to the post-image, or the reverse for a revert.  They are
- * found in the post-image of the source, except for the last one,
- * whose changes are found in `next`, the next version of the chain,
- * or if it is NULL in `two`, whose blob id is `post`.  The lines and
- * the deletions that the record covers get its owners, and those that
- * a source without a record changes are of unknown origin; the human
- * owns the rest, and gains the lines that differ from the version of
- * the source.
- */
-static int seed_file(struct attribution *a, const char *path,
-		     struct file_state *fs, const struct object_id *next,
-		     struct diff_filespec *two, const struct object_id *post)
+/* The owners that the sources found in a version give to its lines. */
+struct found_owners {
+	/* per line: its set, or -1 if no source knows the line */
+	int *sets;
+	/* per line: the index of the source the set comes from, or -1 */
+	int *from;
+	/* per line: that source has the line as it is */
+	char *kept;
+	size_t nr;
+};
+
+static void found_owners_init(struct found_owners *fo, size_t nr)
 {
-	char added = a->revert ? '-' : '+', removed = a->revert ? '+' : '-';
-	mmfile_t base;
+	ALLOC_ARRAY(fo->sets, nr);
+	ALLOC_ARRAY(fo->from, nr);
+	CALLOC_ARRAY(fo->kept, nr);
+	for (size_t i = 0; i < nr; i++)
+		fo->sets[i] = fo->from[i] = -1;
+	fo->nr = nr;
+}
+
+static void found_owners_release(struct found_owners *fo)
+{
+	free(fo->sets);
+	free(fo->from);
+	free(fo->kept);
+}
+
+/*
+ * Merge into `fo` the owners that the source `src` gives to the lines
+ * of `to`, as transplant() computes them from its version `from`,
+ * owned as `sets` says.  A line keeps the set of an earlier source,
+ * unless only the new one has the line as it is.  Returns -1 if the
+ * versions cannot be compared.
+ */
+static int merge_owners(struct attribution *a, struct found_owners *fo,
+			int src, mmfile_t *from, const int *sets, mmfile_t *to)
+{
+	char *kept;
+	int *to_sets = transplant(a, from, sets, to, &kept);
+
+	if (!to_sets)
+		return -1;
+	for (size_t i = 0; i < fo->nr; i++) {
+		if (to_sets[i] < 0 ||
+		    (fo->from[i] >= 0 && (fo->kept[i] || !kept[i])))
+			continue;
+		fo->sets[i] = to_sets[i];
+		fo->from[i] = src;
+		fo->kept[i] = kept[i];
+	}
+	free(to_sets);
+	free(kept);
+	return 0;
+}
+
+/*
+ * Move the file, whose version in the first parent is `base`, to
+ * `found`, whose blob id is `found_oid`, through the changes to `path`
+ * of the sources `begin` to `end` - 1, which are all found in `found`.
+ * The changes of a source are those from the pre-image of its record
+ * to the post-image, or the reverse for a revert.  The lines and the
+ * deletions that the record covers get its owners, and those that a
+ * source without a record changes are of unknown origin; a line that
+ * replaces one of those gains the fallback owner, who also owns the
+ * lines that no source knows.  Takes ownership of `found`.
+ */
+static int step_found(struct attribution *a, const char *path,
+		      struct file_state *fs, mmfile_t *base,
+		      size_t begin, size_t end,
+		      mmfile_t found, const struct object_id *found_oid)
+{
+	int revert = !!(a->flags & PROVENANCE_REWRITE_REVERT);
+	char added = revert ? '-' : '+', removed = revert ? '+' : '-';
+	int fallback = singleton(a, a->fallback);
+	struct found_owners owners, deleters;
 	int ret = 0;
 
-	if (read_blob(a, &fs->oid, &base))
-		return -1;
-	for (size_t i = 0; !ret && i < a->seeds_nr; i++) {
+	found_owners_init(&owners, count_lines(&found));
+	found_owners_init(&deleters, count_lines(base));
+	for (size_t i = begin; !ret && i < end; i++) {
 		struct seed *seed = &a->seeds[i];
 		const struct object_id *new_tree, *old_tree;
-		mmfile_t new = { 0 }, old = { 0 }, found = { 0 };
-		struct object_id new_oid, old_oid, found_oid;
+		mmfile_t new = { 0 }, old = { 0 };
+		struct object_id new_oid, old_oid;
 		int *new_sets = NULL, *old_sets = NULL;
-		int *owners = NULL, *deleters = NULL;
 
 		if (!seed_has_path(seed, path))
 			continue;
-		new_tree = a->revert ? seed->pre_tree : seed->post_tree;
-		old_tree = a->revert ? seed->post_tree : seed->pre_tree;
+		new_tree = revert ? seed->pre_tree : seed->post_tree;
+		old_tree = revert ? seed->post_tree : seed->pre_tree;
 		if (read_path(a, new_tree, path, &new_oid, &new) ||
 		    read_path(a, old_tree, path, &old_oid, &old)) {
 			ret = -1;
-		} else if (i + 1 < a->seeds_nr) {
-			found.ptr = xmemdupz(new.ptr, new.size);
-			found.size = new.size;
-			oidcpy(&found_oid, &new_oid);
-		} else if (next) {
-			ret = read_blob(a, next, &found);
-			oidcpy(&found_oid, next);
 		} else {
-			ret = read_side(a, two, &found);
-			oidcpy(&found_oid, post);
-		}
-
-		if (!ret) {
 			if (seed->src->lines) {
 				new_sets = seed_lines(a, seed, path,
 						      added, &new);
@@ -932,27 +1025,85 @@ static int seed_file(struct attribution *a, const char *path,
 				unknown_lines(a, &old, &new,
 					      &old_sets, &new_sets);
 			}
-			if (new_sets && old_sets) {
-				owners = transplant(a, &new, new_sets, &found);
-				deleters = transplant(a, &old, old_sets, &base);
-			}
-			free(new_sets);
-			free(old_sets);
-			if (!owners || !deleters) {
+			if (!new_sets || !old_sets ||
+			    merge_owners(a, &owners, i, &new, new_sets, &found) ||
+			    merge_owners(a, &deleters, i, &old, old_sets, base))
 				ret = error(_("unable to diff '%s' with its version in %s"),
 					    path, oid_to_hex(&seed->src->commit->object.oid));
-				free(found.ptr);
-			} else {
-				ret = step_seeded(a, fs, found, &found_oid, a->human,
-						  owners, deleters);
-			}
-		} else {
-			free(found.ptr);
 		}
 		free(new.ptr);
 		free(old.ptr);
-		free(owners);
-		free(deleters);
+		free(new_sets);
+		free(old_sets);
+	}
+
+	if (ret) {
+		free(found.ptr);
+	} else {
+		for (size_t i = 0; i < owners.nr; i++)
+			if (owners.sets[i] < 0)
+				owners.sets[i] = fallback;
+		for (size_t i = 0; i < deleters.nr; i++)
+			if (deleters.sets[i] < 0)
+				deleters.sets[i] = fallback;
+		ret = step_seeded(a, fs, found, found_oid, a->fallback,
+				  owners.sets, deleters.sets,
+				  owners.from, deleters.from);
+	}
+	found_owners_release(&owners);
+	found_owners_release(&deleters);
+	return ret;
+}
+
+/*
+ * Move the file, which is at its version in the first parent, through
+ * the changes of each source of a rewrite whose line record has a
+ * block for it, or, for a source without a line record, that changes
+ * it (see step_found()).  The changes of the commit being amended, if
+ * it is a version the commit was made from, are found in its own
+ * post-image; those of all other sources together in `next`, the next
+ * version of the chain, or if it is NULL in `two`, whose blob id is
+ * `post`.
+ */
+static int seed_file(struct attribution *a, const char *path,
+		     struct file_state *fs, const struct object_id *next,
+		     struct diff_filespec *two, const struct object_id *post)
+{
+	mmfile_t base, found;
+	struct object_id found_oid;
+	size_t begin = 0;
+	int ret = 0;
+
+	if (read_blob(a, &fs->oid, &base))
+		return -1;
+
+	if ((a->flags & PROVENANCE_REWRITE_AMEND) && a->seeds_nr > 1) {
+		struct seed *seed = &a->seeds[0];
+
+		begin = 1;
+		if (seed_has_path(seed, path)) {
+			ret = read_path(a, seed->post_tree, path,
+					&found_oid, &found);
+			if (!ret)
+				ret = step_found(a, path, fs, &base, 0, 1,
+						 found, &found_oid);
+		}
+	}
+
+	for (size_t i = begin; !ret && i < a->seeds_nr; i++) {
+		if (!seed_has_path(&a->seeds[i], path))
+			continue;
+		if (next) {
+			ret = read_blob(a, next, &found);
+			oidcpy(&found_oid, next);
+		} else {
+			ret = read_side(a, two, &found);
+			oidcpy(&found_oid, post);
+		}
+		if (!ret)
+			ret = step_found(a, path, fs, &base, begin, a->seeds_nr,
+					 found, &found_oid);
+		break;
 	}
 	free(base.ptr);
 	return ret;
@@ -995,8 +1146,7 @@ static void describe_set(struct attribution *a, int set, int added,
 	int ai = 0, human = 0;
 	int *order;
 
-	/* the unknown origin has the highest index */
-	if (s->actors[s->nr - 1] == a->unknown) {
+	if (is_unknown(a, set)) {
 		range->actors = xstrdup("-");
 		range->mark = PROVENANCE_MARK_UNKNOWN;
 		return;
@@ -1167,7 +1317,7 @@ static int attribute_file(struct attribution *a, const char *path,
 
 	if (!DIFF_FILE_VALID(one) && !chain_nr && !has_seed(a, path)) {
 		/* a new file that no session touched: no need to diff */
-		int human = singleton(a, a->human);
+		int fallback = singleton(a, a->fallback);
 
 		/* the binary check above has usually read it already */
 		if (diff_populate_filespec(a->r, two, NULL)) {
@@ -1180,7 +1330,7 @@ static int attribute_file(struct attribution *a, const char *path,
 		fs.nr = count_lines(&fs.content);
 		ALLOC_ARRAY(fs.owners, fs.nr);
 		for (size_t i = 0; i < fs.nr; i++)
-			fs.owners[i].set = human;
+			fs.owners[i].set = fallback;
 	} else {
 		if (read_blob(a, &pre, &fs.content)) {
 			ret = -1;
@@ -1204,7 +1354,7 @@ static int attribute_file(struct attribution *a, const char *path,
 			const struct change *c = chain[i].change;
 
 			if (!oideq(&fs.oid, &c->pre))
-				ret = step(a, &fs, &c->pre, a->human);
+				ret = step(a, &fs, &c->pre, a->fallback);
 			if (!ret)
 				ret = step(a, &fs, &c->post, chain[i].session);
 		}
@@ -1213,7 +1363,7 @@ static int attribute_file(struct attribution *a, const char *path,
 
 			ret = read_side(a, two, &content);
 			if (!ret)
-				ret = step_to(a, &fs, content, &post, a->human);
+				ret = step_to(a, &fs, content, &post, a->fallback);
 		}
 		if (ret)
 			goto out;
@@ -1270,7 +1420,9 @@ static void add_actors(struct attribution *a, const char *human,
 		if (s->source ? !strcmp(s->source, "observed") : s->stamped)
 			ai = 0;
 	}
-	if (ai) {
+	if (a->flags & PROVENANCE_REWRITE_ADOPT) {
+		rec->capture = PROVENANCE_CAPTURE_ADOPTED;
+	} else if (ai) {
 		rec->capture = PROVENANCE_CAPTURE_DECLARED;
 	} else {
 		rec->capture = PROVENANCE_CAPTURE_OBSERVED;
@@ -1429,19 +1581,20 @@ static int attribution_init(struct attribution *a, struct repository *r,
 			    const struct provenance_journal *journal,
 			    const char *session,
 			    const struct provenance_source *sources,
-			    size_t nr, int revert)
+			    size_t nr, unsigned flags)
 {
 	int ret;
 
 	memset(a, 0, sizeof(*a));
 	a->r = r;
 	a->journal = journal;
-	a->revert = revert;
+	a->flags = flags;
 	CALLOC_ARRAY(a->warned, journal->nr);
 	collect_sessions(a, session);
 	ret = add_seeds(a, sources, nr);
 	a->human = a->sessions_nr;
 	a->unknown = a->human + 1;
+	a->fallback = (flags & PROVENANCE_REWRITE_ADOPT) ? a->unknown : a->human;
 	CALLOC_ARRAY(a->rank, a->unknown + 1);
 	if (!ret)
 		collect_intervals(a, base);
@@ -1564,7 +1717,7 @@ int provenance_attribute_rewrite(struct repository *r,
 				 struct commit *parent,
 				 const struct object_id *tree,
 				 const struct provenance_source *sources,
-				 size_t nr, int revert,
+				 size_t nr, unsigned flags,
 				 const struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,
@@ -1576,8 +1729,12 @@ int provenance_attribute_rewrite(struct repository *r,
 	struct diff_options opt;
 	int ret = 0;
 
-	if (revert && nr != 1)
+	if ((flags & PROVENANCE_REWRITE_REVERT) && nr != 1)
 		BUG("provenance: a revert has %"PRIuMAX" sources", (uintmax_t)nr);
+	if ((flags & PROVENANCE_REWRITE_AMEND) && !nr)
+		BUG("provenance: an amend without a source");
+	if ((flags & PROVENANCE_REWRITE_ADOPT) && journal->nr)
+		BUG("provenance: adopting with a journal");
 	if (parent) {
 		if (repo_parse_commit(r, parent))
 			return error(_("could not parse commit %s"),
@@ -1586,7 +1743,7 @@ int provenance_attribute_rewrite(struct repository *r,
 	}
 
 	if (attribution_init(&a, r, base, journal, session,
-			     sources, nr, revert)) {
+			     sources, nr, flags)) {
 		attribution_release(&a);
 		return -1;
 	}
@@ -1609,8 +1766,15 @@ int provenance_attribute_rewrite(struct repository *r,
 
 	if (!ret) {
 		add_actors(&a, human, lines);
-		for (size_t i = 0; !revert && i < nr; i++)
-			if (sources[i].reasoning)
+		/*
+		 * An adopted commit takes only the reasoning of the
+		 * sources it was found to be made from.
+		 */
+		for (size_t i = 0; i < nr; i++)
+			if (sources[i].reasoning &&
+			    !(flags & PROVENANCE_REWRITE_REVERT) &&
+			    (!(flags & PROVENANCE_REWRITE_ADOPT) ||
+			     a.seeds[i].contributed))
 				copy_reasoning(sources[i].reasoning, reasoning);
 		add_sessions(&a, session, reasoning);
 	}
