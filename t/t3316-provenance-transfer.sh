@@ -192,12 +192,8 @@ test_expect_success 'fetch --all merges the provenance of each remote' '
 	git -C c2 rev-parse refs/provenance/remotes/second/lines >actual &&
 	test_cmp expect actual &&
 	git -C c2 remote remove second &&
-	git -C c2 for-each-ref --format="%(refname)" \
-		refs/provenance/remotes/second/ >refs &&
-	while read ref
-	do
-		git -C c2 update-ref -d "$ref" || return 1
-	done <refs
+	git -C c2 for-each-ref refs/provenance/remotes/second/ >actual &&
+	test_must_be_empty actual
 '
 
 test_expect_success 'push retries after merging when the remote moved' '
@@ -587,6 +583,90 @@ test_expect_success 'push updates the tracking refs of the provenance refs' '
 	git -C track fetch -v 2>err &&
 	test_grep "\[up to date\] *refs/provenance/lines *-> refs/provenance/remotes/origin/lines" err &&
 	test_grep ! "^fast-forwarded\|^merged\|^created" err
+'
+
+test_expect_success 'remote remove deletes the provenance tracking refs' '
+	git clone remote.git rm &&
+	git -C rm remote add other ../remote.git &&
+	git -C rm config set remote.other/nested.url ../remote.git &&
+	git -C rm fetch --all &&
+	git -C rm remote remove other &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	refs/provenance/remotes/origin/lines
+	refs/provenance/remotes/origin/reasoning
+	refs/provenance/remotes/other/nested/lines
+	refs/provenance/remotes/other/nested/reasoning
+	EOF
+	provenance_refs rm >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote rename renames the provenance tracking refs' '
+	git clone remote.git mv &&
+	git -C mv config set core.logAllRefUpdates always &&
+	git -C mv rev-parse refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/reasoning >expect &&
+	git -C mv update-ref -m one refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/lines^ &&
+	git -C mv update-ref -m two refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/lines@{1} &&
+	git -C mv remote rename origin upstream &&
+	git -C mv rev-parse refs/provenance/remotes/upstream/lines \
+		refs/provenance/remotes/upstream/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C mv for-each-ref refs/provenance/remotes/origin/ >actual &&
+	test_must_be_empty actual &&
+	test_must_fail git -C mv reflog exists \
+		refs/provenance/remotes/origin/lines &&
+	cat >expect <<-\EOF &&
+	remote: renamed refs/provenance/remotes/origin/lines to refs/provenance/remotes/upstream/lines
+	two
+	one
+	EOF
+	git -C mv reflog show --format=%gs \
+		refs/provenance/remotes/upstream/lines >actual &&
+	test_cmp expect actual &&
+	git -C mv fetch -v upstream 2>err &&
+	test_grep "\[up to date\] *refs/provenance/lines *-> refs/provenance/remotes/upstream/lines" err
+'
+
+test_expect_success 'remote prune prunes the provenance tracking refs' '
+	git clone --bare remote.git prune2.git &&
+	git clone prune2.git prune2 &&
+	git -C prune2.git update-ref -d refs/provenance/reasoning &&
+	git -C prune2 remote prune --dry-run origin >out &&
+	test_grep "\[would prune\] refs/provenance/remotes/origin/reasoning" out &&
+	git -C prune2 rev-parse --verify refs/provenance/remotes/origin/reasoning &&
+	git -C prune2 remote prune origin >out &&
+	test_grep "\[pruned\] refs/provenance/remotes/origin/reasoning" out &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	refs/provenance/remotes/origin/lines
+	EOF
+	provenance_refs prune2 >actual &&
+	test_cmp expect actual &&
+	git -C prune2.git update-ref -d refs/provenance/lines &&
+	git -C prune2 remote update --prune 2>err &&
+	test_grep "\[deleted\].*refs/provenance/remotes/origin/lines" err &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	EOF
+	provenance_refs prune2 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote prune leaves the tracking refs of an opted-out remote' '
+	git clone --bare remote.git prune3.git &&
+	git clone prune3.git prune3 &&
+	git -C prune3 config set remote.origin.provenance false &&
+	git -C prune3.git update-ref -d refs/provenance/reasoning &&
+	git -C prune3 remote prune origin >out &&
+	test_grep ! refs/provenance out &&
+	git -C prune3 rev-parse --verify refs/provenance/remotes/origin/reasoning
 '
 
 test_done

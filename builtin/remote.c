@@ -8,6 +8,7 @@
 #include "ident.h"
 #include "parse-options.h"
 #include "path.h"
+#include "provenance-transfer.h"
 #include "transport.h"
 #include "remote.h"
 #include "string-list.h"
@@ -393,6 +394,7 @@ static int get_ref_states(const struct ref *remote_refs, struct ref_states *stat
 {
 	struct ref *fetch_map = NULL, **tail = &fetch_map;
 	struct ref *ref, *stale_refs;
+	struct refspec provenance = REFSPEC_INIT_FETCH(the_hash_algo);
 	int i;
 
 	for (i = 0; i < states->remote->fetch.nr; i++)
@@ -416,6 +418,27 @@ static int get_ref_states(const struct ref *remote_refs, struct ref_states *stat
 	}
 	free_refs(stale_refs);
 	free_refs(fetch_map);
+
+	/*
+	 * The tracking refs of the provenance refs are fetched through
+	 * implicit refspecs, which "fetch --prune" prunes with: so does
+	 * "remote prune".
+	 */
+	provenance_fetch_refspecs(the_repository, states->remote, NULL,
+				  &provenance);
+	fetch_map = NULL;
+	tail = &fetch_map;
+	for (i = 0; i < provenance.nr; i++)
+		get_fetch_map(remote_refs, &provenance.items[i], &tail, 1);
+	stale_refs = get_stale_heads(&provenance, fetch_map);
+	for (ref = stale_refs; ref; ref = ref->next) {
+		struct string_list_item *item =
+			string_list_append(&states->stale, ref->name);
+		item->util = xstrdup(ref->name);
+	}
+	free_refs(stale_refs);
+	free_refs(fetch_map);
+	refspec_clear(&provenance);
 
 	string_list_sort(&states->new_refs);
 	string_list_sort(&states->skipped);
@@ -607,6 +630,61 @@ static int add_branch_for_removal(const struct reference *ref, void *cb_data)
 	return 0;
 }
 
+struct provenance_tracking_cb {
+	size_t prefix_len;
+	refs_for_each_cb *fn;
+	void *cb_data;
+};
+
+static int provenance_tracking_one(const struct reference *ref, void *cb_data)
+{
+	struct provenance_tracking_cb *cb = cb_data;
+
+	if (strchr(ref->name + cb->prefix_len, '/'))
+		return 0;
+	return cb->fn(ref, cb->cb_data);
+}
+
+/*
+ * Call `fn` for each tracking ref of the provenance refs of the remote
+ * `name`, refs/provenance/remotes/<name>/<kind>, leaving out those of
+ * a remote whose name starts with "<name>/".
+ */
+static int for_each_provenance_tracking_ref(const char *name,
+					    refs_for_each_cb *fn,
+					    void *cb_data)
+{
+	struct strbuf prefix = STRBUF_INIT;
+	struct refs_for_each_ref_options opts = {
+		.flags = REFS_FOR_EACH_INCLUDE_BROKEN,
+	};
+	struct provenance_tracking_cb cb = { .fn = fn, .cb_data = cb_data };
+	int ret;
+
+	strbuf_addf(&prefix, PROVENANCE_TRACKING_PREFIX "%s/", name);
+	opts.prefix = prefix.buf;
+	cb.prefix_len = prefix.len;
+	ret = refs_for_each_ref_ext(get_main_ref_store(the_repository),
+				    provenance_tracking_one, &cb, &opts);
+	strbuf_release(&prefix);
+	return ret;
+}
+
+static int add_provenance_for_removal(const struct reference *ref,
+				      void *cb_data)
+{
+	struct branches_for_remote *branches = cb_data;
+
+	string_list_append(branches->branches, ref->name);
+	return 0;
+}
+
+static int found_ref(const struct reference *ref UNUSED, void *cb_data)
+{
+	*(int *)cb_data = 1;
+	return 0;
+}
+
 struct rename_info {
 	const char *old_name;
 	const char *new_name;
@@ -621,9 +699,12 @@ static void compute_renamed_ref(struct rename_info *rename,
 				const char *refname,
 				struct strbuf *out)
 {
+	const char *prefix = starts_with(refname, PROVENANCE_TRACKING_PREFIX) ?
+		PROVENANCE_TRACKING_PREFIX : "refs/remotes/";
+
 	strbuf_reset(out);
 	strbuf_addstr(out, refname);
-	strbuf_splice(out, strlen("refs/remotes/"), strlen(rename->old_name),
+	strbuf_splice(out, strlen(prefix), strlen(rename->old_name),
 		      rename->new_name, strlen(rename->new_name));
 }
 
@@ -867,7 +948,7 @@ static int mv(int argc, const char **argv, const char *prefix,
 	struct rename_info rename = {
 		.err = &err,
 	};
-	int refspecs_need_update = 0;
+	int refspecs_need_update = 0, provenance_refs = 0;
 	int result = 0;
 
 	argc = parse_options(argc, argv, prefix, options,
@@ -911,7 +992,10 @@ static int mv(int argc, const char **argv, const char *prefix,
 		refspecs_need_update = !!strstr(oldremote->fetch.items[i].raw,
 						old_remote_context.buf);
 
-	if (refspecs_need_update) {
+	for_each_provenance_tracking_ref(rename.old_name, found_ref,
+					 &provenance_refs);
+
+	if (refspecs_need_update || provenance_refs) {
 		struct refs_for_each_ref_options opts = {
 			.flags = REFS_FOR_EACH_INCLUDE_BROKEN,
 		};
@@ -924,12 +1008,18 @@ static int mv(int argc, const char **argv, const char *prefix,
 			rename.progress = start_delayed_progress(the_repository,
 								 _("Renaming remote references"), 0);
 
-		strbuf_reset(&buf);
-		strbuf_addf(&buf, "refs/remotes/%s/", rename.old_name);
-		opts.prefix = buf.buf;
+		if (refspecs_need_update) {
+			strbuf_reset(&buf);
+			strbuf_addf(&buf, "refs/remotes/%s/", rename.old_name);
+			opts.prefix = buf.buf;
 
-		result = refs_for_each_ref_ext(get_main_ref_store(the_repository),
-					       rename_one_ref, &rename, &opts);
+			result = refs_for_each_ref_ext(get_main_ref_store(the_repository),
+						       rename_one_ref, &rename, &opts);
+		}
+		if (result >= 0)
+			result = for_each_provenance_tracking_ref(rename.old_name,
+								  rename_one_ref,
+								  &rename);
 		if (result < 0)
 			die(_("queueing remote ref renames failed: %s"), rename.err->buf);
 
@@ -983,15 +1073,15 @@ static int mv(int argc, const char **argv, const char *prefix,
 		}
 	}
 
-	if (refspecs_need_update) {
+	if (rename.transaction) {
 		result = ref_transaction_commit(rename.transaction, &err);
 		if (result < 0)
 			die(_("renaming remote refs failed: %s"), rename.err->buf);
 
 		stop_progress(&rename.progress);
-
-		handle_push_default(rename.old_name, rename.new_name);
 	}
+	if (refspecs_need_update)
+		handle_push_default(rename.old_name, rename.new_name);
 
 out:
 	ref_transaction_free(rename.transaction);
@@ -1068,6 +1158,10 @@ static int rm(int argc, const char **argv, const char *prefix,
 	cb_data.remote = remote;
 	result = refs_for_each_ref(get_main_ref_store(the_repository),
 				   add_branch_for_removal, &cb_data);
+	if (!result)
+		result = for_each_provenance_tracking_ref(remote->name,
+							  add_provenance_for_removal,
+							  &cb_data);
 	strbuf_release(&buf);
 
 	if (!result)

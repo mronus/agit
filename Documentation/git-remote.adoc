@@ -210,6 +210,20 @@ The remote configuration is achieved using the `remote.origin.url` and
 `remote.origin.fetch` configuration variables.  (See
 linkgit:git-config[1]).
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+The provenance refs of a remote _<name>_ are fetched into
+`refs/provenance/remotes/<name>/lines` and
+`refs/provenance/remotes/<name>/reasoning` (see the PROVENANCE section
+of linkgit:git-fetch[1]).  `git remote remove` deletes them with the
+other refs of the remote, and `git remote rename` renames them along
+with their reflogs.  `git remote prune` and `git remote update
+--prune` delete those whose provenance ref the remote no longer has,
+unless `remote.<name>.provenance` is false; `git remote show` lists
+them only as such stale refs.
+
 EXIT STATUS
 -----------
 

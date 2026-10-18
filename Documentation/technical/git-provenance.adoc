@@ -714,11 +714,24 @@ nothing for it, so its provenance refs are neither fetched, merged nor
 pushed, while refspecs that name them explicitly are used as given.
 Both checks live in the functions that make the implicit refspecs, so
 every caller inherits them. A remote without provenance refs is not
-an error; the refs
-are not written to `FETCH_HEAD`; `--prune` prunes their tracking refs.
-Nothing is added for a URL, for `--prefetch`, or for a provenance ref
-that the refspecs already map, which covers the `+refs/*:refs/*` of
-`clone --mirror`.
+an error; the refs are not written to `FETCH_HEAD`; `--prune` prunes
+their tracking refs. Nothing is added for a URL, for `--prefetch`, or
+for a provenance ref that the refspecs already map, which covers the
+`+refs/*:refs/*` of `clone --mirror`.
+
+The tracking refs belong to their remote as its remote-tracking
+branches do, and `git remote` maintains them alike. `remote remove`
+deletes `refs/provenance/remotes/<name>/<kind>` with the other refs of
+the remote, and `remote rename` renames them with their reflogs in
+the same ref transaction as `refs/remotes/<old>/*`, also when the
+fetch refspecs are not the default ones. Both leave alone the refs of
+a remote whose name starts with `<name>/`. `remote prune` adds the
+implicit refspecs to those whose stale refs it looks for, as
+`fetch --prune` does, so it prunes a tracking ref whose provenance
+ref the remote no longer has, and `remote show` lists such a ref as
+stale; `remote update --prune` runs `fetch --prune`. A remote that
+opted out has no implicit refspecs, so its tracking refs are not
+pruned.
 
 After a fetch that updated a tracking ref, the tracking ref is merged
 into the local ref, through a ref transaction:
@@ -972,7 +985,7 @@ Each step is implemented and reviewed on its own:
    (done);
    (b) transfer: a per-remote opt-out, `remote prune`, `remove` and
    `rename` of the tracking refs, the tracking refs after a push, and
-   pushes that hooks reject;
+   pushes that hooks reject (done);
    (c) a CI job running selected upstream suites with provenance
    enabled, and the fixes it needs;
    (d) `format-patch`/`am` and `fast-export`/`fast-import`;
