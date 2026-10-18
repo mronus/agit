@@ -50,7 +50,13 @@ struct provenance_source {
  * PROVENANCE_REWRITE_AMEND: `sources[0]` is the commit being amended.
  *
  * PROVENANCE_REWRITE_REVERT: there is one source, and the commit
- * undoes its changes.
+ * undoes its changes.  The lines that the source deleted, which the
+ * commit restores, are owned as a blame of the source's first parent
+ * finds them: by the actors of the range that covers the line in the
+ * line record of the commit that introduced it; such a line is UNKNOWN
+ * if that commit has no line record or the range is UNKNOWN.  The lines
+ * that the source added, which the commit deletes, are attributed as
+ * its line record says.
  *
  * PROVENANCE_REWRITE_ADOPT: the commit was made without the extension
  * (see the "Re-anchoring" section of

@@ -531,10 +531,18 @@ squash, fixup::
 	marks. Sessions are listed once and summaries concatenated.
 
 revert::
-	The sides swap: restored lines come from the source's parent and
-	get the marks of its `-` ranges, and deleted lines get those of
-	its `+` ranges. Reasoning comes from the journal only, as the
-	source's reasoning explains the change, not its revert.
+	The sides swap: the lines the revert deletes get the marks of
+	the `+` ranges of the source. The lines it restores, those of
+	the source's parent that the source deleted, get the marks of
+	whoever wrote them: a blame of the parent, as `git blame` runs
+	it (following renames), finds the commit that introduced each
+	line, and the line takes the actors of the `+` range of that
+	commit's line record that covers it. A line whose commit has no
+	line record, or whose range is `UNKNOWN`, is `UNKNOWN`; a human
+	of that record is the human of the revert. This costs one blame
+	per file the source changes, which is acceptable as reverts are
+	rare. Reasoning comes from the journal only, as the source's
+	reasoning explains the change, not its revert.
 
 A rewrite writes a record even if none of its sources has one: the
 lines it takes from them are `UNKNOWN`, and the lines it adds itself,
@@ -781,6 +789,9 @@ Performance
 - `blame --provenance`: one record lookup per distinct commit in the
   output. A fan-out tree lookup is cheap, and parsed records are
   cached for the run.
+
+- Revert: one blame per file that the reverted commit changes, to
+  find who wrote the lines it restores.
 
 - `diff --provenance` of uncommitted changes: the journal intervals
   are computed once per diff, then each shown path costs one

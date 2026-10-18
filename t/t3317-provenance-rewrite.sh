@@ -288,14 +288,15 @@ test_expect_success 'stamps made while resolving a conflict count' '
 	test_path_is_missing .git/provenance/journal
 '
 
-test_expect_success 'revert carries the marks of the lines it deletes and restores' '
+test_expect_success 'revert restores the marks of the commits that wrote the lines' '
 	git checkout -b revert ai &&
 	git revert --no-edit HEAD &&
 	{
 		header HEAD &&
+		echo "$human_actor" &&
 		echo "$s1_actor" &&
 		echo "file file" &&
-		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
+		echo "+ 3 HUMAN human $(anchor HEAD file 3)" &&
 		echo "- 3 AI s1 $(anchor ai file 3)" &&
 		echo "- 11 AI s1 $(anchor ai file 11)"
 	} >expect &&
@@ -323,15 +324,80 @@ test_expect_success 'a revert concluded with commit carries the marks' '
 	git commit --no-edit &&
 	{
 		header HEAD &&
-		echo "$s1_actor" &&
 		echo "$human_actor" &&
+		echo "$s1_actor" &&
 		echo "file file" &&
-		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
-		echo "- 3 MIXED s1,human $(anchor HEAD^ file 3)" &&
+		echo "+ 3 HUMAN human $(anchor HEAD file 3)" &&
+		echo "- 3 MIXED human,s1 $(anchor HEAD^ file 3)" &&
 		echo "- 11 AI s1 $(anchor HEAD^ file 11)"
 	} >expect &&
 	check_lines HEAD &&
 	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'revert restores a line that a session wrote in an older commit' '
+	git checkout -b revert-older ai &&
+	test_write_lines 1 2 4 5 6 7 8 9 10 11 >file &&
+	git commit -a -m drop-three &&
+	git revert --no-edit HEAD &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s1 $(anchor HEAD file 3)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a restored line from a commit without a record is UNKNOWN' '
+	git checkout -b revert-unrecorded base &&
+	echo 11 >>file &&
+	git -c provenance.enabled=false commit -a -m stock-eleven &&
+	test_write_lines 1 2 3 4 5 6 7 8 9 10 >file &&
+	git commit -a -m drop-eleven &&
+	git revert --no-edit HEAD &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 11 UNKNOWN - $(anchor HEAD file 11)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'reverting a commit without a record restores the marks' '
+	git checkout -b revert-stock ai &&
+	test_write_lines 1 2 THREE 4 5 6 7 8 9 10 11 >file &&
+	git -c provenance.enabled=false commit -a -m stock-three &&
+	git revert --no-edit HEAD &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
+		echo "- 3 UNKNOWN - $(anchor HEAD^ file 3)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'revert follows renames to the commit that wrote a line' '
+	git checkout -b revert-renamed ai &&
+	git mv file moved &&
+	git commit -m moved &&
+	test_write_lines 1 2 4 5 6 7 8 9 10 11 >moved &&
+	git commit -a -m drop-moved-three &&
+	git revert --no-edit HEAD &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file moved" &&
+		echo "+ 3 AI s1 $(anchor HEAD moved 3)"
+	} >expect &&
+	check_lines HEAD &&
 	git provenance verify HEAD
 '
 
