@@ -42,6 +42,7 @@
 #include "dir.h"
 #include "object-file.h"
 #include "object-name.h"
+#include "provenance-view.h"
 #include "read-cache-ll.h"
 #include "setup.h"
 #include "strmap.h"
@@ -607,6 +608,8 @@ struct emit_callback {
 	struct diff_words_data *diff_words;
 	struct diff_options *opt;
 	struct strbuf *header;
+	/* with --provenance: the marks of the lines, else NULL */
+	struct provenance_marks *provenance;
 };
 
 /*
@@ -754,7 +757,7 @@ static void check_blank_at_eof(mmfile_t *mf1, mmfile_t *mf2,
 
 static void emit_line_0(struct diff_options *o,
 			const char *set_sign, const char *set, unsigned reverse, const char *reset,
-			int first, const char *line, int len)
+			int mark, int first, const char *line, int len)
 {
 	int has_trailing_newline, has_trailing_carriage_return;
 	int needs_reset = 0; /* at the end of the line */
@@ -783,8 +786,12 @@ static void emit_line_0(struct diff_options *o,
 		needs_reset = 1;
 	}
 
-	if (first)
+	if (first) {
+		/* the provenance mark goes with the sign */
+		if (mark)
+			fputc(mark, file);
 		fputc(first, file);
+	}
 
 	if (!len)
 		goto end_of_line;
@@ -810,7 +817,7 @@ end_of_line:
 static void emit_line(struct diff_options *o, const char *set, const char *reset,
 		      const char *line, int len)
 {
-	emit_line_0(o, set, NULL, 0, reset, 0, line, len);
+	emit_line_0(o, set, NULL, 0, reset, 0, 0, line, len);
 }
 
 enum diff_symbol {
@@ -879,6 +886,7 @@ struct emitted_diff_symbol {
 	const char *line;
 	int len;
 	int flags;
+	char provenance;  /* the mark of the line with --provenance, or 0 */
 	int indent_off;   /* Offset to first non-whitespace character */
 	int indent_width; /* The visual width of the indentation */
 	unsigned id;
@@ -1361,7 +1369,7 @@ static void dim_moved_lines(struct diff_options *o)
 
 static void emit_line_ws_markup(struct diff_options *o,
 				const char *set_sign, const char *set,
-				const char *reset,
+				const char *reset, int mark,
 				int sign_index, const char *line, int len,
 				unsigned ws_rule, int blank_at_eof)
 {
@@ -1380,16 +1388,17 @@ static void emit_line_ws_markup(struct diff_options *o,
 	}
 
 	if (!ws && !set_sign) {
-		emit_line_0(o, set, NULL, 0, reset, sign, line, len);
+		emit_line_0(o, set, NULL, 0, reset, mark, sign, line, len);
 	} else if (!ws) {
-		emit_line_0(o, set_sign, set, !!set_sign, reset, sign, line, len);
+		emit_line_0(o, set_sign, set, !!set_sign, reset, mark, sign,
+			    line, len);
 	} else if (blank_at_eof) {
 		/* Blank line at EOF - paint '+' as well */
-		emit_line_0(o, ws, NULL, 0, reset, sign, line, len);
+		emit_line_0(o, ws, NULL, 0, reset, mark, sign, line, len);
 	} else {
 		/* Emit just the prefix, then the rest. */
 		emit_line_0(o, set_sign ? set_sign : set, NULL, !!set_sign, reset,
-			    sign, "", 0);
+			    mark, sign, "", 0);
 		ws_check_emit(line, len, ws_rule,
 			      o->file, set, reset, ws);
 	}
@@ -1452,7 +1461,7 @@ static void emit_diff_symbol_from_struct(struct diff_options *o,
 			else if (c == '-')
 				set = diff_get_color_opt(o, DIFF_FILE_OLD);
 		}
-		emit_line_ws_markup(o, set_sign, set, reset,
+		emit_line_ws_markup(o, set_sign, set, reset, eds->provenance,
 				    OUTPUT_INDICATOR_CONTEXT, line, len,
 				    flags & (DIFF_SYMBOL_CONTENT_WS_MASK), 0);
 		break;
@@ -1496,7 +1505,7 @@ static void emit_diff_symbol_from_struct(struct diff_options *o,
 				set = diff_get_color_opt(o, DIFF_CONTEXT_BOLD);
 			flags &= ~DIFF_SYMBOL_CONTENT_WS_MASK;
 		}
-		emit_line_ws_markup(o, set_sign, set, reset,
+		emit_line_ws_markup(o, set_sign, set, reset, eds->provenance,
 				    OUTPUT_INDICATOR_NEW, line, len,
 				    flags & DIFF_SYMBOL_CONTENT_WS_MASK,
 				    flags & DIFF_SYMBOL_CONTENT_BLANK_LINE_EOF);
@@ -1540,7 +1549,7 @@ static void emit_diff_symbol_from_struct(struct diff_options *o,
 			else
 				set = diff_get_color_opt(o, DIFF_CONTEXT_DIM);
 		}
-		emit_line_ws_markup(o, set_sign, set, reset,
+		emit_line_ws_markup(o, set_sign, set, reset, eds->provenance,
 				    OUTPUT_INDICATOR_OLD, line, len,
 				    flags & DIFF_SYMBOL_CONTENT_WS_MASK, 0);
 		break;
@@ -1630,17 +1639,38 @@ static void emit_diff_symbol_from_struct(struct diff_options *o,
 	}
 }
 
-static void emit_diff_symbol(struct diff_options *o, enum diff_symbol s,
-			     const char *line, int len, unsigned flags)
+static void emit_diff_symbol_mark(struct diff_options *o, enum diff_symbol s,
+				  const char *line, int len, unsigned flags,
+				  char mark)
 {
 	struct emitted_diff_symbol e = {
-		.line = line, .len = len, .flags = flags, .s = s
+		.line = line, .len = len, .flags = flags, .s = s,
+		.provenance = mark,
 	};
 
 	if (o->emitted_symbols)
 		append_emitted_diff_symbol(o, &e);
 	else
 		emit_diff_symbol_from_struct(o, &e);
+}
+
+static void emit_diff_symbol(struct diff_options *o, enum diff_symbol s,
+			     const char *line, int len, unsigned flags)
+{
+	emit_diff_symbol_mark(o, s, line, len, flags, 0);
+}
+
+/*
+ * The provenance mark of the line just counted in the pre-image (or
+ * the post-image if `post`), or 0 without --provenance.
+ */
+static char line_mark(struct emit_callback *ecbdata, int post)
+{
+	if (!ecbdata->provenance)
+		return 0;
+	return provenance_marks_get(ecbdata->provenance, post,
+				    (post ? ecbdata->lno_in_postimage :
+				     ecbdata->lno_in_preimage) - 1);
 }
 
 void diff_emit_submodule_del(struct diff_options *o, const char *line)
@@ -1700,21 +1730,24 @@ static void emit_add_line(struct emit_callback *ecbdata,
 	if (new_blank_line_at_eof(ecbdata, line, len))
 		flags |= DIFF_SYMBOL_CONTENT_BLANK_LINE_EOF;
 
-	emit_diff_symbol(ecbdata->opt, DIFF_SYMBOL_PLUS, line, len, flags);
+	emit_diff_symbol_mark(ecbdata->opt, DIFF_SYMBOL_PLUS, line, len, flags,
+			      line_mark(ecbdata, 1));
 }
 
 static void emit_del_line(struct emit_callback *ecbdata,
 			  const char *line, int len)
 {
 	unsigned flags = WSEH_OLD | ecbdata->ws_rule;
-	emit_diff_symbol(ecbdata->opt, DIFF_SYMBOL_MINUS, line, len, flags);
+	emit_diff_symbol_mark(ecbdata->opt, DIFF_SYMBOL_MINUS, line, len, flags,
+			      line_mark(ecbdata, 0));
 }
 
 static void emit_context_line(struct emit_callback *ecbdata,
 			      const char *line, int len)
 {
 	unsigned flags = WSEH_CONTEXT | ecbdata->ws_rule;
-	emit_diff_symbol(ecbdata->opt, DIFF_SYMBOL_CONTEXT, line, len, flags);
+	emit_diff_symbol_mark(ecbdata->opt, DIFF_SYMBOL_CONTEXT, line, len,
+			      flags, ecbdata->provenance ? ' ' : 0);
 }
 
 static void emit_incomplete_line_marker(struct emit_callback *ecbdata,
@@ -1886,6 +1919,7 @@ static void emit_rewrite_diff(const char *name_a,
 	size_t size_one, size_two;
 	unsigned ws_rule;
 	struct emit_callback ecbdata;
+	struct provenance_marks marks = PROVENANCE_MARKS_INIT;
 	struct strbuf out = STRBUF_INIT;
 
 	if (diff_mnemonic_prefix && o->flags.reverse_diff) {
@@ -1927,6 +1961,13 @@ static void emit_rewrite_diff(const char *name_a,
 	}
 	ecbdata.lno_in_preimage = 1;
 	ecbdata.lno_in_postimage = 1;
+	if (o->flags.provenance) {
+		if (!textconv_one && !textconv_two)
+			provenance_diff_marks(o, one, two, DIFF_STATUS_MODIFIED,
+					      data_one, size_one,
+					      data_two, size_two, &marks);
+		ecbdata.provenance = &marks;
+	}
 
 	lc_a = count_lines(data_one, size_one);
 	lc_b = count_lines(data_two, size_two);
@@ -1955,6 +1996,7 @@ static void emit_rewrite_diff(const char *name_a,
 		free((char *)data_one);
 	if (textconv_two)
 		free((char *)data_two);
+	provenance_marks_release(&marks);
 }
 
 struct diff_words_buffer {
@@ -3824,6 +3866,7 @@ static void builtin_diff(const char *name_a,
 			 int must_show_header,
 			 struct diff_options *o,
 			 int complete_rewrite,
+			 char status,
 			 const struct range_set *line_ranges)
 {
 	mmfile_t mf1, mf2;
@@ -3994,6 +4037,7 @@ static void builtin_diff(const char *name_a,
 		xpparam_t xpp;
 		xdemitconf_t xecfg;
 		struct emit_callback ecbdata;
+		struct provenance_marks marks = PROVENANCE_MARKS_INIT;
 		unsigned ws_rule;
 		const struct userdiff_funcname *pe;
 
@@ -4052,6 +4096,15 @@ static void builtin_diff(const char *name_a,
 
 		if (o->word_diff)
 			init_diff_words_data(&ecbdata, o, one, two);
+		else if (o->flags.provenance && o->file) {
+			/* lines shown through a textconv get no marks */
+			if (!textconv_one && !textconv_two)
+				provenance_diff_marks(o, one, two, status,
+						      mf1.ptr, mf1.size,
+						      mf2.ptr, mf2.size,
+						      &marks);
+			ecbdata.provenance = &marks;
+		}
 		if (!o->file) {
 			/*
 			 * Unlike the normal output case, we need to ignore the
@@ -4116,6 +4169,7 @@ static void builtin_diff(const char *name_a,
 			die("unable to generate diff for %s", one->path);
 		if (o->word_diff)
 			free_diff_words_data(&ecbdata);
+		provenance_marks_release(&marks);
 		if (textconv_one)
 			free(mf1.ptr);
 		if (textconv_two)
@@ -4955,7 +5009,7 @@ static void run_diff_cmd(const struct external_diff *pgm,
 
 		builtin_diff(name, other ? other : name,
 			     one, two, xfrm_msg, must_show_header,
-			     o, complete_rewrite, p->line_ranges);
+			     o, complete_rewrite, p->status, p->line_ranges);
 		if (p->status == DIFF_STATUS_COPIED ||
 		    p->status == DIFF_STATUS_RENAMED)
 			o->found_changes = 1;
@@ -6032,6 +6086,8 @@ struct option *add_diff_options(const struct option *opts,
 			       PARSE_OPT_NONEG | PARSE_OPT_OPTARG, diff_opt_unified),
 		OPT_BOOL('W', "function-context", &options->flags.funccontext,
 			 N_("generate diffs with <n> lines context")),
+		OPT_BOOL(0, "provenance", &options->flags.provenance,
+			 N_("show who wrote each line of the patch")),
 		OPT_BITOP(0, "raw", &options->output_format,
 			  N_("generate the diff in raw format"),
 			  DIFF_FORMAT_RAW, DIFF_FORMAT_NO_OUTPUT),
@@ -7161,6 +7217,7 @@ void diff_free(struct diff_options *options)
 	diff_free_file(options);
 	diff_free_ignore_regex(options);
 	clear_pathspec(&options->pathspec);
+	provenance_diff_release(options);
 }
 
 void diff_flush(struct diff_options *options)

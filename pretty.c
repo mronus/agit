@@ -16,6 +16,7 @@
 #include "mailmap.h"
 #include "log-tree.h"
 #include "notes.h"
+#include "provenance-view.h"
 #include "color.h"
 #include "reflog-walk.h"
 #include "gpg-interface.h"
@@ -1725,6 +1726,16 @@ static size_t format_commit_one(struct strbuf *sb, /* in UTF-8 */
 
 		free_decoration_options(&opts);
 		return ret;
+	}
+
+	if (skip_prefix(placeholder, "(provenance:", &arg)) {
+		const char *end = strchr(arg, ')');
+
+		if (!end ||
+		    provenance_format_field(c->repository, &commit->object.oid,
+					    arg, end - arg, sb))
+			return 0;
+		return end - placeholder + 1;
 	}
 
 	/* For the rest we have to parse the commit header. */

@@ -18,6 +18,7 @@
 #include "strbuf.h"
 #include "string-list.h"
 #include "strmap.h"
+#include "tree-walk.h"
 #include "version.h"
 #include "xdiff-interface.h"
 
@@ -548,12 +549,13 @@ static int diff_hunks(mmfile_t *file_a, mmfile_t *file_b,
 }
 
 /*
- * Move the file from its current version to `next`, made by `actor`:
- * lines the step leaves alone keep their owners, lines it changes gain
- * `actor`, and lines it adds belong to `actor` alone.
+ * Move the file from its current version to `next`, whose content is
+ * `content`, made by `actor`: lines the step leaves alone keep their
+ * owners, lines it changes gain `actor`, and lines it adds belong to
+ * `actor` alone.  Takes ownership of `content`.
  */
-static int step(struct attribution *a, struct file_state *fs,
-		const struct object_id *next, int actor)
+static int step_to(struct attribution *a, struct file_state *fs,
+		   mmfile_t content, const struct object_id *next, int actor)
 {
 	struct step st = {
 		.a = a,
@@ -561,11 +563,8 @@ static int step(struct attribution *a, struct file_state *fs,
 		.old = fs->owners,
 		.deleted = fs->deleted,
 	};
-	mmfile_t content;
 	size_t nr;
 
-	if (read_blob(a, next, &content))
-		return -1;
 	nr = count_lines(&content);
 	CALLOC_ARRAY(st.new, nr);
 
@@ -586,6 +585,34 @@ static int step(struct attribution *a, struct file_state *fs,
 	fs->owners = st.new;
 	fs->nr = nr;
 	oidcpy(&fs->oid, next);
+	return 0;
+}
+
+/* As step_to(), with the content of the blob `next`. */
+static int step(struct attribution *a, struct file_state *fs,
+		const struct object_id *next, int actor)
+{
+	mmfile_t content;
+
+	if (read_blob(a, next, &content))
+		return -1;
+	return step_to(a, fs, content, next, actor);
+}
+
+/* Read the content of one side of a file: empty unless a regular file. */
+static int read_side(struct attribution *a,
+		     struct diff_filespec *spec, mmfile_t *mf)
+{
+	if (!DIFF_FILE_VALID(spec) || !S_ISREG(spec->mode)) {
+		mf->ptr = xstrdup("");
+		mf->size = 0;
+		return 0;
+	}
+	if (diff_populate_filespec(a->r, spec, NULL))
+		return error(_("unable to read blob '%s'"),
+			     oid_to_hex(&spec->oid));
+	mf->ptr = xmemdupz(spec->data, spec->size);
+	mf->size = spec->size;
 	return 0;
 }
 
@@ -737,11 +764,16 @@ static int add_file(struct attribution *a, const char *path,
 	return 0;
 }
 
-static int attribute_file(struct attribution *a,
-			  struct diff_filepair *p,
+/*
+ * Attribute the changes to `path` from `one` (its version in the first
+ * parent) to `two`, and add its block to `rec`.  The content of `two`
+ * is taken from its data if it has been populated, so that it need not
+ * be in the object database.
+ */
+static int attribute_file(struct attribution *a, const char *path,
+			  struct diff_filespec *one, struct diff_filespec *two,
 			  struct provenance_record *rec)
 {
-	const char *path = p->two->path;
 	struct object_id pre, post;
 	struct file_state fs = { 0 };
 	struct {
@@ -751,15 +783,15 @@ static int attribute_file(struct attribution *a,
 	size_t chain_nr = 0, chain_alloc = 0;
 	int ret = 0;
 
-	if ((DIFF_FILE_VALID(p->one) && !S_ISREG(p->one->mode)) ||
-	    (DIFF_FILE_VALID(p->two) && !S_ISREG(p->two->mode)) ||
+	if ((DIFF_FILE_VALID(one) && !S_ISREG(one->mode)) ||
+	    (DIFF_FILE_VALID(two) && !S_ISREG(two->mode)) ||
 	    strchr(path, '\n'))
 		return 0;
-	side_oid(a, p->one, &pre);
-	side_oid(a, p->two, &post);
+	side_oid(a, one, &pre);
+	side_oid(a, two, &post);
 	if (oideq(&pre, &post) ||
-	    (DIFF_FILE_VALID(p->one) && diff_filespec_is_binary(a->r, p->one)) ||
-	    (DIFF_FILE_VALID(p->two) && diff_filespec_is_binary(a->r, p->two)))
+	    (DIFF_FILE_VALID(one) && diff_filespec_is_binary(a->r, one)) ||
+	    (DIFF_FILE_VALID(two) && diff_filespec_is_binary(a->r, two)))
 		goto out;
 
 	for (size_t i = 0; i < a->intervals_nr; i++) {
@@ -782,18 +814,18 @@ static int attribute_file(struct attribution *a,
 		chain_nr++;
 	}
 
-	if (!DIFF_FILE_VALID(p->one) && !chain_nr) {
+	if (!DIFF_FILE_VALID(one) && !chain_nr) {
 		/* a new file that no session touched: no need to diff */
 		int human = singleton(a, a->human);
 
 		/* the binary check above has usually read it already */
-		if (diff_populate_filespec(a->r, p->two, NULL)) {
+		if (diff_populate_filespec(a->r, two, NULL)) {
 			ret = error(_("unable to read blob '%s'"),
 				    oid_to_hex(&post));
 			goto out;
 		}
-		fs.content.ptr = xmemdupz(p->two->data, p->two->size);
-		fs.content.size = p->two->size;
+		fs.content.ptr = xmemdupz(two->data, two->size);
+		fs.content.size = two->size;
 		fs.nr = count_lines(&fs.content);
 		ALLOC_ARRAY(fs.owners, fs.nr);
 		for (size_t i = 0; i < fs.nr; i++)
@@ -821,8 +853,13 @@ static int attribute_file(struct attribution *a,
 			if (!ret)
 				ret = step(a, &fs, &c->post, chain[i].session);
 		}
-		if (!ret && !oideq(&fs.oid, &post))
-			ret = step(a, &fs, &post, a->human);
+		if (!ret && !oideq(&fs.oid, &post)) {
+			mmfile_t content;
+
+			ret = read_side(a, two, &content);
+			if (!ret)
+				ret = step_to(a, &fs, content, &post, a->human);
+		}
 		if (ret)
 			goto out;
 	}
@@ -831,8 +868,8 @@ static int attribute_file(struct attribution *a,
 	ret = add_file(a, path, &pre, &post, &fs, rec);
 
 out:
-	diff_free_filespec_data(p->one);
-	diff_free_filespec_data(p->two);
+	diff_free_filespec_data(one);
+	diff_free_filespec_data(two);
 	file_state_release(&fs);
 	free(chain);
 	return ret;
@@ -939,6 +976,25 @@ static void add_sessions(struct attribution *a, const char *session,
 	}
 }
 
+struct provenance_attribution {
+	struct attribution a;
+	/* the tree of the first parent, or the empty tree */
+	struct object_id base;
+};
+
+static void attribution_init(struct attribution *a, struct repository *r,
+			     const struct object_id *base,
+			     const struct provenance_journal *journal,
+			     const char *session)
+{
+	memset(a, 0, sizeof(*a));
+	a->r = r;
+	a->journal = journal;
+	CALLOC_ARRAY(a->warned, journal->nr);
+	collect_sessions(a, session);
+	collect_intervals(a, base);
+}
+
 static void attribution_release(struct attribution *a)
 {
 	for (size_t i = 0; i < a->sessions_nr; i++) {
@@ -956,6 +1012,52 @@ static void attribution_release(struct attribution *a)
 	free(a->rank);
 }
 
+struct provenance_attribution *
+provenance_attribution_new(struct repository *r, const struct object_id *base,
+			   const struct provenance_journal *journal)
+{
+	struct provenance_attribution *pa;
+
+	CALLOC_ARRAY(pa, 1);
+	oidcpy(&pa->base, base);
+	attribution_init(&pa->a, r, &pa->base, journal, NULL);
+	return pa;
+}
+
+int provenance_attribute_path(struct provenance_attribution *pa,
+			      const char *path, const char *buf, size_t len,
+			      unsigned mode, struct provenance_record *lines)
+{
+	struct repository *r = pa->a.r;
+	struct diff_filespec *one = alloc_filespec(path);
+	struct diff_filespec *two = alloc_filespec(path);
+	struct object_id oid;
+	unsigned short base_mode;
+	int ret;
+
+	if (!get_tree_entry(r, &pa->base, path, &oid, &base_mode))
+		fill_filespec(one, &oid, 1, base_mode);
+	if (buf) {
+		/* hashed, not written: the content stays in memory */
+		hash_object_file(r->hash_algo, buf, len, OBJ_BLOB, &oid);
+		fill_filespec(two, &oid, 1, mode);
+		two->data = (char *)buf;
+		two->size = len;
+	}
+	ret = attribute_file(&pa->a, path, one, two, lines);
+	free_filespec(one);
+	free_filespec(two);
+	return ret;
+}
+
+void provenance_attribution_free(struct provenance_attribution *pa)
+{
+	if (!pa)
+		return;
+	attribution_release(&pa->a);
+	free(pa);
+}
+
 int provenance_attribute(struct repository *r,
 			 struct commit *parent,
 			 const struct object_id *tree,
@@ -965,10 +1067,7 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_record *lines,
 			 struct provenance_reasoning *reasoning)
 {
-	struct attribution a = {
-		.r = r,
-		.journal = journal,
-	};
+	struct attribution a;
 	const struct object_id *base = r->hash_algo->empty_tree;
 	struct diff_options opt;
 	int ret = 0;
@@ -980,9 +1079,7 @@ int provenance_attribute(struct repository *r,
 		base = get_commit_tree_oid(parent);
 	}
 
-	CALLOC_ARRAY(a.warned, journal->nr);
-	collect_sessions(&a, session);
-	collect_intervals(&a, base);
+	attribution_init(&a, r, base, journal, session);
 
 	lines->version = 1;
 	repo_diff_setup(r, &opt);
@@ -993,8 +1090,11 @@ int provenance_attribute(struct repository *r,
 	diff_setup_done(&opt);
 	diff_tree_oid(base, tree, "", &opt);
 	diffcore_std(&opt);
-	for (int i = 0; !ret && i < diff_queued_diff.nr; i++)
-		ret = attribute_file(&a, diff_queued_diff.queue[i], lines);
+	for (int i = 0; !ret && i < diff_queued_diff.nr; i++) {
+		struct diff_filepair *p = diff_queued_diff.queue[i];
+
+		ret = attribute_file(&a, p->two->path, p->one, p->two, lines);
+	}
 	diff_flush(&opt);
 
 	if (!ret) {

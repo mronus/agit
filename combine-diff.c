@@ -1517,6 +1517,8 @@ void diff_tree_combined(const struct object_id *oid,
 
 	diffopts = *opt;
 	copy_pathspec(&diffopts.pathspec, &opt->pathspec);
+	/* combined diffs show no provenance; do not share its state */
+	diffopts.provenance = NULL;
 	diffopts.flags.allow_external = 0;
 	if (!opt->flags.no_recursive_diff_tree_combined)
 		diffopts.flags.recursive = 1;

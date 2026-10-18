@@ -34,6 +34,7 @@
 #include "wildmatch.h"
 #include "write-or-die.h"
 #include "pager.h"
+#include "provenance-view.h"
 
 static struct decoration name_decoration = { "object names" };
 static int decoration_loaded;
@@ -1196,6 +1197,7 @@ static int log_tree_diff(struct rev_info *opt, struct commit *commit, struct log
 	if (!all_need_diff && !opt->merges_need_diff)
 		return 0;
 
+	provenance_diff_unset(&opt->diffopt);
 	if (opt->line_level_traverse) {
 		line_log_queue_pairs(opt, commit);
 		log_tree_diff_flush(opt);
@@ -1213,6 +1215,10 @@ static int log_tree_diff(struct rev_info *opt, struct commit *commit, struct log
 	/* Root commit? */
 	if (!parents) {
 		if (opt->show_root_diff) {
+			const struct git_hash_algo *algo = opt->repo->hash_algo;
+
+			provenance_diff_set_commit(&opt->diffopt, commit,
+						   algo->empty_tree);
 			diff_root_tree_oid(oid, "", &opt->diffopt);
 			log_tree_diff_flush(opt);
 		}
@@ -1248,6 +1254,8 @@ static int log_tree_diff(struct rev_info *opt, struct commit *commit, struct log
 		struct commit *parent = parents->item;
 
 		parse_commit_or_die(parent);
+		provenance_diff_set_commit(&opt->diffopt, commit,
+					   get_commit_tree_oid(parent));
 		diff_tree_oid(get_commit_tree_oid(parent),
 			      oid, "", &opt->diffopt);
 		log_tree_diff_flush(opt);
