@@ -1574,7 +1574,7 @@ static int try_to_commit(struct repository *r,
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
-	int record_provenance = provenance_enabled(r), have_provenance = 0;
+	int record_provenance = provenance_enabled(r);
 	char *amend_author = NULL;
 	const char *committer = NULL;
 	const char *hook_commit = NULL;
@@ -1733,11 +1733,10 @@ static int try_to_commit(struct repository *r,
 			prov_rw = *rw;
 		if (flags & AMEND_MSG)
 			prov_rw.amend = current_head;
-		have_provenance = provenance_commit_records(r,
+		if (provenance_commit_records(r,
 				parents ? parents->item : NULL, &tree,
 				author ? author : git_author_info(IDENT_STRICT),
-				NULL, &prov_rw, &prov_lines, &prov_reasoning);
-		if (have_provenance < 0) {
+				NULL, &prov_rw, &prov_lines, &prov_reasoning)) {
 			res = error(_("unable to record provenance"));
 			goto out;
 		}
@@ -1748,7 +1747,7 @@ static int try_to_commit(struct repository *r,
 	if (!transaction ||
 	    queue_head_update_with_reflog(transaction, current_head, oid,
 					  reflog_action, msg, &err) ||
-	    (have_provenance &&
+	    (record_provenance &&
 	     provenance_queue_records(r, transaction, oid, &prov_lines,
 				      &prov_reasoning, reflog_action, &err)) ||
 	    ref_transaction_commit(transaction, &err)) {

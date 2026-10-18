@@ -36,11 +36,10 @@ struct provenance_rewrite {
  * the commits it names are carried over.  `session` is as for
  * provenance_attribute().
  *
- * Returns 1 if the commit gets the records, which are stored in
- * `lines` and `reasoning` as by provenance_attribute(), and 0 if it
- * gets none: a commit that applies or undoes the changes of other
- * commits gets no records if none of them has a line record.  A line
- * record that cannot be parsed is ignored with a warning.  Returns -1
+ * The records are stored in `lines` and `reasoning` as by
+ * provenance_attribute().  The lines that the commit takes from a
+ * commit without a line record are UNKNOWN; a line record that cannot
+ * be parsed is ignored with a warning.  Returns 0 on success, or -1
  * after reporting an error.  The journal is left alone.
  */
 int provenance_commit_records(struct repository *r,

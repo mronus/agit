@@ -32,9 +32,11 @@
  * A set of actors, sorted by actor index.  Actors 0 to sessions_nr - 1
  * are the sessions of the journal, in the order in which they appear
  * in it, followed by the AI actors that only the line records of the
- * sources of a rewrite declare, and actor sessions_nr is the human
- * making the commit.  Sets are interned, so that two lines have the
- * same owners exactly if they have the same set index.
+ * sources of a rewrite declare, actor sessions_nr is the human making
+ * the commit, and actor sessions_nr + 1 stands for an unknown origin,
+ * such as that of the lines a rewrite takes from a commit without a
+ * line record.  Sets are interned, so that two lines have the same
+ * owners exactly if they have the same set index.
  */
 struct owner_set {
 	int *actors;
@@ -93,6 +95,8 @@ struct seed {
 	const struct object_id *pre_tree;
 	/* per actor of the source's line record: its index, -1 for a human */
 	int *actors;
+	/* without a line record: the paths it changes, -> struct change */
+	struct strmap changes;
 };
 
 struct attribution {
@@ -106,8 +110,8 @@ struct attribution {
 
 	struct session_info *sessions;
 	size_t sessions_nr, sessions_alloc;
-	/* the actor index of the human */
-	int human;
+	/* the actor indices of the human and of an unknown origin */
+	int human, unknown;
 
 	struct owner_set *sets;
 	size_t sets_nr, sets_alloc;
@@ -714,7 +718,8 @@ static int seed_set(struct attribution *a, const struct seed *seed,
 /*
  * Per line of `content`, which is the version of `path` on `side` of
  * the line record of `seed`: the set of the range of the record that
- * contains the line, or -1.
+ * contains the line, or -1.  The lines of an `UNKNOWN` range stay of
+ * unknown origin.
  */
 static int *seed_lines(struct attribution *a, const struct seed *seed,
 		       const char *path, char side, const mmfile_t *content)
@@ -733,11 +738,66 @@ static int *seed_lines(struct attribution *a, const struct seed *seed,
 
 		if (range->side != side || !range->begin)
 			continue;
-		set = seed_set(a, seed, range->actors);
+		if (range->mark == PROVENANCE_MARK_UNKNOWN)
+			set = singleton(a, a->unknown);
+		else
+			set = seed_set(a, seed, range->actors);
 		for (unsigned long l = range->begin; l <= range->end && l <= nr; l++)
 			sets[l - 1] = set;
 	}
 	return sets;
+}
+
+struct unknown_lines {
+	int *old_sets, *new_sets;
+	int set;
+};
+
+static int unknown_hunk(long start_a, long count_a,
+			long start_b, long count_b, void *data)
+{
+	struct unknown_lines *u = data;
+
+	for (long i = 0; i < count_a; i++)
+		u->old_sets[start_a + i] = u->set;
+	for (long i = 0; i < count_b; i++)
+		u->new_sets[start_b + i] = u->set;
+	return 0;
+}
+
+/*
+ * As seed_lines() for both versions of a path, `old` and `new`, of a
+ * source without a line record: the lines that differ between them are
+ * of unknown origin.  Leaves `old_sets` and `new_sets` alone if the
+ * versions cannot be compared.
+ */
+static void unknown_lines(struct attribution *a, mmfile_t *old, mmfile_t *new,
+			  int **old_sets, int **new_sets)
+{
+	struct unknown_lines u = { .set = singleton(a, a->unknown) };
+	size_t old_nr = count_lines(old), new_nr = count_lines(new);
+
+	ALLOC_ARRAY(u.old_sets, old_nr);
+	for (size_t i = 0; i < old_nr; i++)
+		u.old_sets[i] = -1;
+	ALLOC_ARRAY(u.new_sets, new_nr);
+	for (size_t i = 0; i < new_nr; i++)
+		u.new_sets[i] = -1;
+	if (diff_hunks(old, new, unknown_hunk, &u)) {
+		free(u.old_sets);
+		free(u.new_sets);
+		return;
+	}
+	*old_sets = u.old_sets;
+	*new_sets = u.new_sets;
+}
+
+/* Whether the changes of `seed` include some to `path`. */
+static int seed_has_path(struct seed *seed, const char *path)
+{
+	if (seed->src->lines)
+		return !!provenance_record_file(seed->src->lines, path);
+	return strmap_contains(&seed->changes, path);
 }
 
 struct transplant {
@@ -806,7 +866,7 @@ static int *transplant(struct attribution *a, mmfile_t *from,
 static int has_seed(struct attribution *a, const char *path)
 {
 	for (size_t i = 0; i < a->seeds_nr; i++)
-		if (provenance_record_file(a->seeds[i].src->lines, path))
+		if (seed_has_path(&a->seeds[i], path))
 			return 1;
 	return 0;
 }
@@ -814,14 +874,16 @@ static int has_seed(struct attribution *a, const char *path)
 /*
  * Move the file, which is at its version in the first parent, through
  * the changes of each source of a rewrite whose line record has a
- * block for it.  The changes of a source are those from the pre-image
- * of its record to the post-image, or the reverse for a revert.  They
- * are found in the post-image of the source, except for the last one,
+ * block for it, or, for a source without a line record, that changes
+ * it.  The changes of a source are those from the pre-image of its
+ * record to the post-image, or the reverse for a revert.  They are
+ * found in the post-image of the source, except for the last one,
  * whose changes are found in `next`, the next version of the chain,
  * or if it is NULL in `two`, whose blob id is `post`.  The lines and
- * the deletions that the record covers get its owners; the human owns
- * the rest, and gains the lines that differ from the version of the
- * source.
+ * the deletions that the record covers get its owners, and those that
+ * a source without a record changes are of unknown origin; the human
+ * owns the rest, and gains the lines that differ from the version of
+ * the source.
  */
 static int seed_file(struct attribution *a, const char *path,
 		     struct file_state *fs, const struct object_id *next,
@@ -834,13 +896,14 @@ static int seed_file(struct attribution *a, const char *path,
 	if (read_blob(a, &fs->oid, &base))
 		return -1;
 	for (size_t i = 0; !ret && i < a->seeds_nr; i++) {
-		const struct seed *seed = &a->seeds[i];
+		struct seed *seed = &a->seeds[i];
 		const struct object_id *new_tree, *old_tree;
 		mmfile_t new = { 0 }, old = { 0 }, found = { 0 };
 		struct object_id new_oid, old_oid, found_oid;
-		int *new_sets, *old_sets, *owners = NULL, *deleters = NULL;
+		int *new_sets = NULL, *old_sets = NULL;
+		int *owners = NULL, *deleters = NULL;
 
-		if (!provenance_record_file(seed->src->lines, path))
+		if (!seed_has_path(seed, path))
 			continue;
 		new_tree = a->revert ? seed->pre_tree : seed->post_tree;
 		old_tree = a->revert ? seed->post_tree : seed->pre_tree;
@@ -860,10 +923,19 @@ static int seed_file(struct attribution *a, const char *path,
 		}
 
 		if (!ret) {
-			new_sets = seed_lines(a, seed, path, added, &new);
-			old_sets = seed_lines(a, seed, path, removed, &old);
-			owners = transplant(a, &new, new_sets, &found);
-			deleters = transplant(a, &old, old_sets, &base);
+			if (seed->src->lines) {
+				new_sets = seed_lines(a, seed, path,
+						      added, &new);
+				old_sets = seed_lines(a, seed, path,
+						      removed, &old);
+			} else {
+				unknown_lines(a, &old, &new,
+					      &old_sets, &new_sets);
+			}
+			if (new_sets && old_sets) {
+				owners = transplant(a, &new, new_sets, &found);
+				deleters = transplant(a, &old, old_sets, &base);
+			}
 			free(new_sets);
 			free(old_sets);
 			if (!owners || !deleters) {
@@ -911,7 +983,9 @@ static void apply_claims(struct attribution *a, const char *path,
 
 /*
  * Fill in the mark and the actors of a range owned by `set`, ranking
- * the actors by first use as they are seen.
+ * the actors by first use as they are seen.  A line of unknown origin
+ * stays `UNKNOWN` whoever else touched it, as `MIXED` would claim to
+ * know who wrote it; its other actors are neither listed nor attached.
  */
 static void describe_set(struct attribution *a, int set, int added,
 			 struct provenance_range *range)
@@ -920,6 +994,13 @@ static void describe_set(struct attribution *a, int set, int added,
 	struct strbuf buf = STRBUF_INIT;
 	int ai = 0, human = 0;
 	int *order;
+
+	/* the unknown origin has the highest index */
+	if (s->actors[s->nr - 1] == a->unknown) {
+		range->actors = xstrdup("-");
+		range->mark = PROVENANCE_MARK_UNKNOWN;
+		return;
+	}
 
 	ALLOC_ARRAY(order, s->nr);
 	for (size_t i = 0; i < s->nr; i++) {
@@ -1277,6 +1358,8 @@ static void import_actors(struct attribution *a, struct seed *seed)
 {
 	const struct provenance_record *rec = seed->src->lines;
 
+	if (!rec)
+		return;
 	ALLOC_ARRAY(seed->actors, rec->actors_nr);
 	for (size_t i = 0; i < rec->actors_nr; i++) {
 		const struct provenance_actor *actor = &rec->actors[i];
@@ -1331,6 +1414,10 @@ static int add_seeds(struct attribution *a,
 					     oid_to_hex(&parent->object.oid));
 			seed->pre_tree = get_commit_tree_oid(parent);
 		}
+		strmap_init(&seed->changes);
+		if (!seed->src->lines)
+			collect_changes(a, seed->pre_tree, seed->post_tree,
+					&seed->changes);
 		import_actors(a, seed);
 		a->seeds_nr++;
 	}
@@ -1354,7 +1441,8 @@ static int attribution_init(struct attribution *a, struct repository *r,
 	collect_sessions(a, session);
 	ret = add_seeds(a, sources, nr);
 	a->human = a->sessions_nr;
-	CALLOC_ARRAY(a->rank, a->sessions_nr + 1);
+	a->unknown = a->human + 1;
+	CALLOC_ARRAY(a->rank, a->unknown + 1);
 	if (!ret)
 		collect_intervals(a, base);
 	return ret;
@@ -1362,8 +1450,10 @@ static int attribution_init(struct attribution *a, struct repository *r,
 
 static void attribution_release(struct attribution *a)
 {
-	for (size_t i = 0; i < a->seeds_nr; i++)
+	for (size_t i = 0; i < a->seeds_nr; i++) {
 		free(a->seeds[i].actors);
+		strmap_clear(&a->seeds[i].changes, 1);
+	}
 	free(a->seeds);
 	for (size_t i = 0; i < a->sessions_nr; i++) {
 		string_list_clear(&a->sessions[i].claims, 0);

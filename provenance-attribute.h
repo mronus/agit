@@ -38,6 +38,7 @@ int provenance_attribute(struct repository *r,
 /* A commit whose records seed the attribution of a rewritten commit. */
 struct provenance_source {
 	struct commit *commit;
+	/* NULL if the commit has no line record */
 	const struct provenance_record *lines;
 	/* NULL if the commit has no reasoning record */
 	const struct provenance_reasoning *reasoning;
@@ -50,7 +51,10 @@ struct provenance_source {
  * Documentation/technical/git-provenance.adoc.
  *
  * The changes of each source are attributed as its line record says,
- * before the stamps in `journal`.  All sources but the last are
+ * before the stamps in `journal`.  The lines that a source without a
+ * line record changes, like those its record marks UNKNOWN, are of
+ * unknown origin, and stay UNKNOWN however they are edited after.
+ * All sources but the last are
  * versions the commit was made from, as the commit being amended is;
  * the changes of the last one are found in the commit, wherever they
  * were applied.  If `revert` is set, there must be one source, and

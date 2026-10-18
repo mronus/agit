@@ -1678,7 +1678,6 @@ static void do_commit(const struct am_state *state)
 	int record_provenance = state->rebasing &&
 				!is_null_oid(&state->orig_commit) &&
 				provenance_enabled(the_repository);
-	int have_provenance = 0;
 
 	if (!state->no_verify && run_hooks(the_repository, "pre-applypatch"))
 		exit(1);
@@ -1725,10 +1724,9 @@ static void do_commit(const struct am_state *state)
 		if (!rw.pick)
 			die(_("could not parse commit %s"),
 			    oid_to_hex(&state->orig_commit));
-		have_provenance = provenance_commit_records(the_repository,
+		if (provenance_commit_records(the_repository,
 				parents ? parents->item : NULL, &tree, author,
-				NULL, &rw, &prov_lines, &prov_reasoning);
-		if (have_provenance < 0)
+				NULL, &rw, &prov_lines, &prov_reasoning))
 			die(_("unable to record provenance"));
 	}
 
@@ -1739,7 +1737,7 @@ static void do_commit(const struct am_state *state)
 	strbuf_addf(&sb, "%s: %.*s", reflog_msg, linelen(state->msg),
 			state->msg);
 
-	if (have_provenance) {
+	if (record_provenance) {
 		/* Move HEAD and the provenance refs together. */
 		struct ref_store *refs = get_main_ref_store(the_repository);
 		struct ref_transaction *transaction;

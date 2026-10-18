@@ -163,17 +163,19 @@ test_expect_success '--amend keeps the marks of the lines it leaves alone' '
 	test_path_is_missing .git/provenance/journal
 '
 
-test_expect_success '--amend of a commit without a record records it afresh' '
+test_expect_success '--amend of a commit without a record marks its lines UNKNOWN' '
 	git checkout -b stock base &&
 	echo 11 >>file &&
 	git -c provenance.enabled=false commit -a -m stock &&
 	test_must_fail git provenance show HEAD &&
-	git commit --amend --no-edit &&
+	echo 12 >>file &&
+	git commit -a --amend --no-edit &&
 	{
 		header HEAD &&
 		echo "$human_actor" &&
 		echo "file file" &&
-		echo "+ 11 HUMAN human $(anchor HEAD file 11)"
+		echo "+ 11 UNKNOWN - $(anchor HEAD file 11)" &&
+		echo "+ 12 HUMAN human $(anchor HEAD file 12)"
 	} >expect &&
 	check_lines HEAD &&
 	git provenance verify HEAD
@@ -511,22 +513,139 @@ test_expect_success 'rebases that fast-forward record nothing' '
 	test_cmp before actual
 '
 
-test_expect_success 'rewrites of commits without records record nothing' '
+test_expect_success 'rewrites of commits without records mark their lines UNKNOWN' '
 	git checkout -b unrecorded-base base &&
 	echo 11 >>file &&
 	git -c provenance.enabled=false commit -a -m unrecorded &&
 	git tag unrecorded &&
 	git checkout -b unrecorded-pick shift &&
-	git rev-parse refs/provenance/lines >before &&
 	git cherry-pick unrecorded &&
-	test_must_fail git provenance show HEAD &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD &&
+	git show --provenance HEAD >actual &&
+	test_grep "^?+11$" actual &&
+	git tag unrecorded-picked &&
+
 	git revert --no-edit HEAD &&
-	test_must_fail git provenance show HEAD &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "- 12 UNKNOWN - $(anchor HEAD^ file 12)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD &&
+
+	test_tick &&
 	git checkout -b unrecorded-rebase unrecorded &&
 	git rebase shift &&
-	test_must_fail git provenance show HEAD &&
-	git rev-parse refs/provenance/lines >actual &&
-	test_cmp before actual
+	same_records unrecorded-picked HEAD &&
+	test_tick &&
+	git checkout -b unrecorded-apply unrecorded &&
+	git rebase --apply shift &&
+	same_records unrecorded-picked HEAD
+'
+
+test_expect_success 'squash marks the lines of a commit without a record UNKNOWN' '
+	git checkout -b squash-unrecorded ai &&
+	test_write_lines 1 2 three 4 five 6 7 8 9 10 11 12 >file &&
+	git -c provenance.enabled=false commit -a -m unrecorded-on-ai &&
+	(
+		set_fake_editor &&
+		FAKE_LINES="1 squash 2" git rebase -i base
+	) &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
+		echo "+ 5 UNKNOWN - $(anchor HEAD file 5)" &&
+		echo "+ 11 AI s1 $(anchor HEAD file 11)" &&
+		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)" &&
+		echo "- 3 AI s1 $(anchor base file 3)" &&
+		echo "- 5 UNKNOWN - $(anchor base file 5)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance show --reasoning ai >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'setup a conflict with a commit without a record' '
+	git checkout -b unrecorded-five base &&
+	test_write_lines 1 2 3 4 five 6 7 8 9 10 >file &&
+	git -c provenance.enabled=false commit -a -m five &&
+	git checkout -b FIVE base &&
+	test_write_lines 1 2 3 4 FIVE 6 7 8 9 10 >file &&
+	git commit -a -m FIVE
+'
+
+test_expect_success 'an UNKNOWN line edited in a conflict resolution stays UNKNOWN' '
+	git checkout -b unknown-resolve FIVE &&
+	test_must_fail git cherry-pick unrecorded-five &&
+	test_write_lines 1 2 3 4 five-ish 6 7 8 9 10 >file &&
+	git add file &&
+	git cherry-pick --continue --no-edit &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 5 UNKNOWN - $(anchor HEAD file 5)" &&
+		echo "- 5 UNKNOWN - $(anchor HEAD^ file 5)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD &&
+	git tag unknown-resolved
+'
+
+test_expect_success 'an UNKNOWN line rewritten by a session stays UNKNOWN' '
+	test_tick &&
+	git checkout -b unknown-stamped FIVE &&
+	test_must_fail git cherry-pick unrecorded-five &&
+	test_write_lines 1 2 3 4 five 6 7 8 9 10 >file &&
+	git stamp begin --session s2 &&
+	test_write_lines 1 2 3 4 five-ish 6 7 8 9 10 >file &&
+	git stamp end --session s2 &&
+	echo "Second summary." | git stamp reason --session s2 --summary - &&
+	git commit -a --no-edit &&
+	same_records unknown-resolved HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/journal
+'
+
+test_expect_success 'UNKNOWN ranges of a record are carried as UNKNOWN' '
+	git checkout -b adopted base &&
+	test_write_lines 1 2 3 4 5 6 7 8 9 10 11 12 >file &&
+	git -c provenance.enabled=false commit -a -m adopted &&
+	{
+		echo "version 1" &&
+		echo "commit $(git rev-parse HEAD)" &&
+		echo "capture adopted" &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 11 AI s1 $(anchor HEAD file 11)" &&
+		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)"
+	} >adopted.out &&
+	add_record lines HEAD adopted.out &&
+	git provenance verify HEAD &&
+	git checkout -b adopted-pick shift &&
+	git cherry-pick adopted &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 12 AI s1 $(anchor HEAD file 12)" &&
+		echo "+ 13 UNKNOWN - $(anchor HEAD file 13)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
 '
 
 test_expect_success 'a record that does not parse is ignored with a warning' '
@@ -538,7 +657,12 @@ test_expect_success 'a record that does not parse is ignored with a warning' '
 	git checkout -b bad-pick shift &&
 	git cherry-pick bad-base 2>err &&
 	test_grep "ignoring the line record of $(git rev-parse bad-base)" err &&
-	test_must_fail git provenance show HEAD
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)"
+	} >expect &&
+	check_lines HEAD
 '
 
 test_expect_success 'nothing is recorded when provenance is disabled' '
