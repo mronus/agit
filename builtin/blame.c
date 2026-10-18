@@ -29,6 +29,8 @@
 #include "object-name.h"
 #include "odb.h"
 #include "pager.h"
+#include "provenance.h"
+#include "provenance-view.h"
 #include "blame.h"
 #include "refs.h"
 #include "setup.h"
@@ -70,6 +72,8 @@ static int coloring_mode;
 static struct string_list ignore_revs_file_list = STRING_LIST_INIT_DUP;
 static int mark_unblamable_lines;
 static int mark_ignored_lines;
+static int show_provenance;
+static struct provenance_cache provenance_cache;
 
 static struct date_mode blame_date_mode = { DATE_ISO8601 };
 static size_t blame_date_width;
@@ -274,6 +278,85 @@ static int emit_one_suspect_detail(struct blame_origin *suspect, int repeat)
 }
 
 /*
+ * Return the range of the line record of the commit blamed for line
+ * `cnt` of `ent` that covers the line, or NULL if there is none, and
+ * point `rec` to the record.
+ */
+static const struct provenance_range *
+line_provenance(const struct blame_entry *ent, int cnt,
+		const struct provenance_record **rec)
+{
+	const struct provenance_file *file;
+
+	*rec = NULL;
+	/* in reverse, a line is blamed on the last commit that has it */
+	if (!show_provenance || reverse)
+		return NULL;
+	*rec = provenance_cache_get(&provenance_cache,
+				    &ent->suspect->commit->object.oid);
+	if (!*rec)
+		return NULL;
+	file = provenance_record_file(*rec, ent->suspect->path);
+	if (!file)
+		return NULL;
+	return provenance_file_range(file, '+', ent->s_lno + 1 + cnt);
+}
+
+static char provenance_mark(const struct blame_entry *ent, int cnt)
+{
+	const struct provenance_record *rec;
+	const struct provenance_range *range = line_provenance(ent, cnt, &rec);
+
+	return range ? provenance_mark_char(range->mark) : '?';
+}
+
+/* The number of lines from line `cnt` of `ent` on with the same provenance. */
+static int provenance_run(const struct blame_entry *ent, int cnt)
+{
+	const struct provenance_record *rec;
+	const struct provenance_range *range;
+	int end = cnt + 1;
+
+	if (!show_provenance)
+		return ent->num_lines - cnt;
+	range = line_provenance(ent, cnt, &rec);
+	while (end < ent->num_lines && line_provenance(ent, end, &rec) == range)
+		end++;
+	return end - cnt;
+}
+
+/* Write the porcelain headers for the provenance of line `cnt` of `ent`. */
+static void write_provenance_info(const struct blame_entry *ent, int cnt)
+{
+	const struct provenance_record *rec;
+	const struct provenance_range *range;
+	enum provenance_mark mark;
+	struct strbuf buf = STRBUF_INIT;
+	const char *p;
+
+	if (!show_provenance)
+		return;
+	range = line_provenance(ent, cnt, &rec);
+	mark = range ? range->mark : PROVENANCE_MARK_UNKNOWN;
+	printf("provenance-mark %s\n", provenance_mark_name(mark));
+	if (mark == PROVENANCE_MARK_UNKNOWN)
+		return;
+	for (p = range->actors; *p; ) {
+		const char *e = strchrnul(p, ',');
+		const struct provenance_actor *actor =
+			provenance_record_actor(rec, p, e - p);
+
+		if (actor) {
+			strbuf_reset(&buf);
+			provenance_actor_format(actor, &buf);
+			printf("provenance-actor %s\n", buf.buf);
+		}
+		p = *e ? e + 1 : e;
+	}
+	strbuf_release(&buf);
+}
+
+/*
  * The blame_entry is found to be guilty for the range.
  * Show it in incremental output.
  */
@@ -283,12 +366,21 @@ static void found_guilty_entry(struct blame_entry *ent, void *data)
 
 	if (incremental) {
 		struct blame_origin *suspect = ent->suspect;
+		int cnt = 0;
 
-		printf("%s %d %d %d\n",
-		       oid_to_hex(&suspect->commit->object.oid),
-		       ent->s_lno + 1, ent->lno + 1, ent->num_lines);
-		emit_one_suspect_detail(suspect, 0);
-		write_filename_info(suspect);
+		/* lines of different provenance are reported separately */
+		do {
+			int n = provenance_run(ent, cnt);
+
+			printf("%s %d %d %d\n",
+			       oid_to_hex(&suspect->commit->object.oid),
+			       ent->s_lno + 1 + cnt, ent->lno + 1 + cnt, n);
+			emit_one_suspect_detail(suspect, 0);
+			/* "filename" ends the entry */
+			write_provenance_info(ent, cnt);
+			write_filename_info(suspect);
+			cnt += n;
+		} while (cnt < ent->num_lines);
 		maybe_flush_or_die(stdout, "stdout");
 	}
 	pi->blamed_lines += ent->num_lines;
@@ -348,12 +440,13 @@ static void emit_porcelain_details(struct blame_origin *suspect, int repeat)
  * information which can be clubbed on a commit/file level, should
  * be printed via 'emit_one_suspect_detail()'.
  */
-static void emit_porcelain_per_line_details(struct blame_entry *ent)
+static void emit_porcelain_per_line_details(struct blame_entry *ent, int cnt)
 {
 	if (mark_unblamable_lines && ent->unblamable)
 		puts("unblamable");
 	if (mark_ignored_lines && ent->ignored)
 		puts("ignored");
+	write_provenance_info(ent, cnt);
 }
 
 static void emit_porcelain(struct blame_scoreboard *sb, struct blame_entry *ent,
@@ -372,7 +465,7 @@ static void emit_porcelain(struct blame_scoreboard *sb, struct blame_entry *ent,
 	       ent->lno + 1,
 	       ent->num_lines);
 	emit_porcelain_details(suspect, repeat);
-	emit_porcelain_per_line_details(ent);
+	emit_porcelain_per_line_details(ent, 0);
 
 	cp = blame_nth_line(sb, ent->lno);
 	for (cnt = 0; cnt < ent->num_lines; cnt++) {
@@ -383,7 +476,7 @@ static void emit_porcelain(struct blame_scoreboard *sb, struct blame_entry *ent,
 			       ent->lno + 1 + cnt);
 			if (repeat)
 				emit_porcelain_details(suspect, 1);
-			emit_porcelain_per_line_details(ent);
+			emit_porcelain_per_line_details(ent, cnt);
 		}
 		putchar('\t');
 		do {
@@ -535,6 +628,8 @@ static void emit_other(struct blame_scoreboard *sb, struct blame_entry *ent,
 		length -= print_marks(stdout, ent, opt);
 
 		printf("%.*s", (int)(length < GIT_MAX_HEXSZ ? length : GIT_MAX_HEXSZ), hex);
+		if (show_provenance)
+			printf(" %c", provenance_mark(ent, cnt));
 		if (opt & OUTPUT_ANNOTATE_COMPAT) {
 			const char *name;
 			if (opt & OUTPUT_SHOW_EMAIL)
@@ -979,6 +1074,7 @@ int cmd_blame(int argc,
 		OPT_BOOL(0, "root", &show_root, N_("do not treat root commits as boundaries (Default: off)")),
 		OPT_BOOL(0, "show-stats", &show_stats, N_("show work cost statistics")),
 		OPT_BOOL(0, "progress", &show_progress, N_("force progress reporting")),
+		OPT_BOOL(0, "provenance", &show_provenance, N_("show who wrote each line (Default: off)")),
 		OPT_BIT(0, "score-debug", &output_option, N_("show output score for blame entries"), OUTPUT_SHOW_SCORE),
 		OPT_BIT('f', "show-name", &output_option, N_("show original filename (Default: auto)"), OUTPUT_SHOW_NAME),
 		OPT_BIT('n', "show-number", &output_option, N_("show original linenumber (Default: off)"), OUTPUT_SHOW_NUMBER),
@@ -1285,6 +1381,8 @@ parse_done:
 						     _("Blaming lines"),
 						     num_lines);
 
+	if (show_provenance)
+		provenance_cache_init(&provenance_cache, the_repository);
 	assign_blame(&sb, opt);
 
 	stop_progress(&pi.progress);
@@ -1330,5 +1428,7 @@ cleanup:
 	free(path);
 	cleanup_scoreboard(&sb);
 	release_revisions(&revs);
+	if (show_provenance)
+		provenance_cache_release(&provenance_cache);
 	return 0;
 }

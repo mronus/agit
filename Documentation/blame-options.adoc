@@ -57,6 +57,18 @@ include::line-range-format.adoc[]
 	Show the result incrementally in a format designed for
 	machine consumption.
 
+`--provenance`::
+	Show who wrote each line, as recorded by the provenance records
+	of the commit the line is attributed to (see
+	linkgit:git-provenance[1]): `A` for a line written by an AI
+	agent, `M` for one that an agent and a human both edited, `H`
+	for one written by a human, and `?` when it is not known, for
+	example because the commit has no record.  The mark follows the
+	commit name.  In the porcelain formats, the mark and the actors
+	responsible for the line are given in `provenance-mark` and
+	`provenance-actor` lines.  With `--reverse`, every line is
+	shown as `?`.
+
 `--encoding=<encoding>`::
 	Specify the encoding used to output author names
 	and commit summaries. Setting it to `none` makes blame

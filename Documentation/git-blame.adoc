@@ -11,7 +11,7 @@ SYNOPSIS
 git blame [-c] [-b] [-l] [--root] [-t] [-f] [-n] [-s] [-e] [-p] [-w] [--incremental]
 	  [-L <range>] [-S <revs-file>] [-M] [-C] [-C] [-C] [--since=<date>]
 	  [--ignore-rev <rev>] [--ignore-revs-file <file>]
-	  [--color-lines] [--color-by-age] [--progress] [--abbrev=<n>]
+	  [--color-lines] [--color-by-age] [--progress] [--abbrev=<n>] [--provenance]
 	  [ --contents <file> ] [<rev> | --reverse <rev>..<rev>] [--] <file>
 
 DESCRIPTION
@@ -149,6 +149,20 @@ for each line, allowing simpler (but less efficient) usage like:
 	sed -n 's/^author //p' |
 	sort | uniq -c | sort -rn
 
+With `--provenance`, the provenance of each line is given in lines
+that, like `ignored` and `unblamable`, are specific to individual
+lines and therefore output for every line, after the commit
+information:
+
+- `provenance-mark` followed by the mark of the line: `AI`, `MIXED`,
+  `HUMAN` or `UNKNOWN`;
+- unless the mark is `UNKNOWN`, one `provenance-actor` line for each
+  actor responsible for the line, followed by the declaration of the
+  actor in the line record of the commit, without the leading `actor`
+  keyword, for example
+  `provenance-actor s1 ai model=m1 tool=t1 session=s1 source=observed`
+  or `provenance-actor human human ident=A U Thor <author@example.com>`.
+
 
 SPECIFYING RANGES
 -----------------
@@ -223,6 +237,12 @@ Line numbers count from 1.
   other information about it printed out with a one-word tag at the
   beginning of each line describing the extra commit information (author,
   email, committer, dates, summary, etc.).
+
+. With `--provenance`, the `provenance-mark` and `provenance-actor`
+  lines described for the Porcelain format follow, and the lines of
+  an entry all have the same provenance: lines that the same commit
+  got from different ranges of its line record are reported in
+  separate entries.
 
 . Unlike the Porcelain format, the filename information is always
   given and terminates the entry:
