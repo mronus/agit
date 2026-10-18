@@ -40,6 +40,22 @@ commit.  A commit without a record is not an error; it simply has no
 provenance (for example, history recorded before the extension was in
 use, or commits made with stock Git).
 
+The provenance refs of a remote are fetched into tracking refs, as
+branches are fetched into remote-tracking branches, and merged into
+the local refs from there:
+
+`refs/provenance/remotes/<name>/lines`::
+	The line records of the remote _<name>_, as last fetched.
+
+`refs/provenance/remotes/<name>/reasoning`::
+	The reasoning records of the remote _<name>_, as last fetched.
+
+They are not under `refs/remotes/<name>/`, where they would be taken
+for remote-tracking branches.  They are not pushed along with the
+branches, and a mirror of a repository has the remote's
+`refs/provenance/lines` and `refs/provenance/reasoning` themselves
+instead.
+
 
 Common rules
 ------------

@@ -23,6 +23,7 @@
 #include "send-pack.h"
 #include "trace2.h"
 #include "color.h"
+#include "provenance-transfer.h"
 
 static const char * const push_usage[] = {
 	N_("git push [<options>] [<repository> [<refspec>...]]"),
@@ -364,12 +365,76 @@ static void advise_ref_needs_update(void)
 	advise(_(message_advice_ref_needs_update));
 }
 
+static const char message_advice_provenance_rejected[] =
+	N_("Updates of the provenance refs were rejected. To merge the provenance\n"
+	   "records of the remote into yours, use 'git fetch %s' before pushing\n"
+	   "again.");
+
+static void advise_provenance_rejected(const char *remote_name)
+{
+	if (!advice_enabled(ADVICE_PUSH_UPDATE_REJECTED))
+		return;
+	advise(_(message_advice_provenance_rejected), remote_name);
+}
+
+/* The flags that do not apply to a push of the provenance refs alone. */
+#define PROVENANCE_ONLY_MASK \
+	(TRANSPORT_PUSH_ALL | TRANSPORT_PUSH_FOLLOW_TAGS | \
+	 TRANSPORT_PUSH_SET_UPSTREAM)
+
 static int push_with_options(struct transport *transport, struct refspec *rs,
-			     int flags)
+			     int flags, int use_cas, struct refspec *provenance);
+
+/*
+ * Merge the provenance refs that the push to `url` whose result is
+ * `pushed` failed to update because the remote moved, and push
+ * `again` (the provenance refs, or with --atomic everything) once
+ * more.
+ */
+static int push_provenance_again(struct remote *remote, const char *url,
+				 const struct string_list *push_options,
+				 const struct ref *pushed,
+				 struct refspec *again, int flags, int use_cas)
+{
+	struct transport *transport;
+
+	if (verbosity >= 0)
+		fprintf(stderr,
+			_("Merging the provenance refs of '%s' and pushing them again\n"),
+			remote->name);
+	if (provenance_fetch_rejected(the_repository, remote->name, pushed)) {
+		error(_("failed to fetch the provenance refs of '%s'"),
+		      remote->name);
+		advise_provenance_rejected(remote->name);
+		return 1;
+	}
+
+	transport = transport_get(remote, url);
+	transport->push_options = push_options;
+	if (push_with_options(transport, again, flags, use_cas, NULL)) {
+		advise_provenance_rejected(remote->name);
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * Push `rs` through `transport`, which is disconnected afterwards.
+ * If `provenance` is given, it holds the provenance refspecs that `rs`
+ * includes: if the remote rejects one because the remote ref moved,
+ * fetch and merge the provenance refs and push them once more.
+ */
+static int push_with_options(struct transport *transport, struct refspec *rs,
+			     int flags, int use_cas, struct refspec *provenance)
 {
 	int err;
 	unsigned int reject_reasons;
 	char *anon_url = transport_anonymize_url(transport->url);
+	struct remote *remote = transport->remote;
+	const char *url = transport->url;
+	const struct string_list *push_options = transport->push_options;
+	struct ref *pushed = NULL;
+	int retry = 0, other_errors = 0;
 
 	transport_set_verbosity(transport, verbosity, progress);
 	transport->family = family;
@@ -379,12 +444,15 @@ static int push_with_options(struct transport *transport, struct refspec *rs,
 				     TRANS_OPT_RECEIVEPACK, receivepack);
 	transport_set_option(transport, TRANS_OPT_THIN, thin ? "yes" : NULL);
 
-	if (!is_empty_cas(&cas)) {
+	if (use_cas && !is_empty_cas(&cas)) {
 		if (!transport->smart_options)
 			die("underlying transport does not support --%s option",
 			    "force-with-lease");
 		transport->smart_options->cas = &cas;
 	}
+
+	if (provenance)
+		transport->pushed_refs = &pushed;
 
 	if (verbosity > 0)
 		fprintf(stderr, _("Pushing to %s\n"), anon_url);
@@ -392,7 +460,9 @@ static int push_with_options(struct transport *transport, struct refspec *rs,
 	err = transport_push(the_repository, transport,
 			     rs, flags, &reject_reasons);
 	trace2_region_leave("push", "transport_push", the_repository);
-	if (err != 0) {
+	if (err && provenance && !(flags & TRANSPORT_PUSH_DRY_RUN))
+		retry = provenance_push_rejected(pushed, &other_errors);
+	if (err != 0 && (!retry || other_errors)) {
 		fprintf(stderr, "%s", push_get_color(PUSH_COLOR_ERROR));
 		error(_("failed to push some refs to '%s'"), anon_url);
 		fprintf(stderr, "%s", push_get_color(PUSH_COLOR_RESET));
@@ -400,6 +470,26 @@ static int push_with_options(struct transport *transport, struct refspec *rs,
 
 	err |= transport_disconnect(transport);
 	free(anon_url);
+
+	if (retry) {
+		int ret;
+
+		if (flags & TRANSPORT_PUSH_ATOMIC)
+			ret = push_provenance_again(remote, url, push_options,
+						    pushed, rs, flags, use_cas);
+		else
+			ret = push_provenance_again(remote, url, push_options,
+						    pushed, provenance,
+						    flags & ~PROVENANCE_ONLY_MASK,
+						    use_cas);
+
+		free_refs(pushed);
+		if (!other_errors)
+			return ret;
+	} else {
+		free_refs(pushed);
+	}
+
 	if (!err)
 		return 0;
 
@@ -427,6 +517,9 @@ static int do_push(int flags,
 	int errs;
 	struct strvec *url;
 	struct refspec *push_refspec = &rs;
+	struct refspec provenance = REFSPEC_INIT_PUSH(the_hash_algo);
+	struct refspec with_provenance = REFSPEC_INIT_PUSH(the_hash_algo);
+	int separate = 0;
 
 	if (push_options->nr)
 		flags |= TRANSPORT_PUSH_OPTIONS;
@@ -437,6 +530,29 @@ static int do_push(int flags,
 		} else if (!(flags & TRANSPORT_PUSH_MIRROR))
 			setup_default_push_refspecs(&flags, remote);
 	}
+
+	/*
+	 * Push the provenance refs along with the branches, in the same
+	 * push, unless a --force-with-lease without a ref would cover
+	 * them: push them on their own, without a lease, then.
+	 */
+	if (!deleterefs)
+		provenance_push_refspecs(the_repository, remote, push_refspec,
+					 flags, &provenance);
+	if (provenance.nr && cas.use_tracking_for_rest) {
+		separate = 1;
+	} else if (provenance.nr) {
+		if (!push_refspec->nr)
+			refspec_append(&with_provenance, ":");
+		for (int i = 0; i < push_refspec->nr; i++)
+			refspec_append(&with_provenance,
+				       push_refspec->items[i].raw);
+		for (int i = 0; i < provenance.nr; i++)
+			refspec_append(&with_provenance,
+				       provenance.items[i].raw);
+		push_refspec = &with_provenance;
+	}
+
 	errs = 0;
 	url = push_url_of_remote(remote);
 	for (size_t i = 0; i < url->nr; i++) {
@@ -444,9 +560,22 @@ static int do_push(int flags,
 			transport_get(remote, url->v[i]);
 		if (flags & TRANSPORT_PUSH_OPTIONS)
 			transport->push_options = push_options;
-		if (push_with_options(transport, push_refspec, flags))
+		if (push_with_options(transport, push_refspec, flags, 1,
+				      provenance.nr && !separate ?
+				      &provenance : NULL))
+			errs++;
+		if (!separate)
+			continue;
+		transport = transport_get(remote, url->v[i]);
+		if (flags & TRANSPORT_PUSH_OPTIONS)
+			transport->push_options = push_options;
+		if (push_with_options(transport, &provenance,
+				      flags & ~PROVENANCE_ONLY_MASK, 0,
+				      &provenance))
 			errs++;
 	}
+	refspec_clear(&with_provenance);
+	refspec_clear(&provenance);
 	return !!errs;
 }
 

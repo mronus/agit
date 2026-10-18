@@ -373,6 +373,7 @@ integration_tests = [
   't3313-provenance-stamp.sh',
   't3314-provenance-commit.sh',
   't3315-provenance-view.sh',
+  't3316-provenance-transfer.sh',
   't3320-notes-merge-worktrees.sh',
   't3321-notes-stripspace.sh',
   't3400-rebase.sh',

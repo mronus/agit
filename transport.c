@@ -1614,7 +1614,10 @@ int transport_push(struct repository *r,
 
 done:
 	free_refs(local_refs);
-	free_refs(remote_refs);
+	if (transport->pushed_refs)
+		*transport->pushed_refs = remote_refs;
+	else
+		free_refs(remote_refs);
 	return ret;
 }
 

@@ -47,6 +47,7 @@
 #include "hook.h"
 #include "bundle.h"
 #include "bundle-uri.h"
+#include "provenance-transfer.h"
 
 /*
  * Overall FIXMEs:
@@ -467,8 +468,10 @@ static struct ref *find_remote_branch(const struct ref *refs, const char *branch
 
 static struct ref *wanted_peer_refs(struct clone_opts *opts,
 				    const struct ref *refs,
-				    struct refspec *refspec)
+				    struct refspec *refspec,
+				    struct refspec *provenance_rs)
 {
+	const struct ref *all_refs = refs;
 	struct ref *local_refs = NULL;
 	struct ref **tail = &local_refs;
 	struct ref *to_free = NULL;
@@ -489,6 +492,10 @@ static struct ref *wanted_peer_refs(struct clone_opts *opts,
 
 	for (size_t i = 0; i < refspec->nr; i++)
 		get_fetch_map(refs, &refspec->items[i], &tail, 0);
+
+	/* The provenance refs need not exist on the remote. */
+	for (size_t i = 0; i < provenance_rs->nr; i++)
+		get_fetch_map(all_refs, &provenance_rs->items[i], &tail, 1);
 
 	free_one_ref(to_free);
 
@@ -907,6 +914,7 @@ int cmd_clone(int argc,
 	const struct ref *our_head_points_at;
 	char *unborn_head = NULL;
 	struct ref *mapped_refs = NULL;
+	struct refspec provenance_rs = { 0 };
 	const struct ref *ref;
 	struct strbuf key = STRBUF_INIT;
 	struct strbuf buf = STRBUF_INIT;
@@ -1444,7 +1452,15 @@ int cmd_clone(int argc,
 		 */
 		refspec_append(&remote->fetch, TAG_REFSPEC);
 
+	/* A mirror fetches the provenance refs as they are. */
+	refspec_init_fetch(&provenance_rs, the_hash_algo);
+	if (!option_mirror)
+		provenance_fetch_refspecs(the_repository, remote, NULL,
+					  &provenance_rs);
+
 	refspec_ref_prefixes(&remote->fetch,
+			     &transport_ls_refs_options.ref_prefixes);
+	refspec_ref_prefixes(&provenance_rs,
 			     &transport_ls_refs_options.ref_prefixes);
 	if (option_branch)
 		expand_ref_prefix(&transport_ls_refs_options.ref_prefixes,
@@ -1537,7 +1553,8 @@ int cmd_clone(int argc,
 	}
 
 	if (refs)
-		mapped_refs = wanted_peer_refs(&opts, refs, &remote->fetch);
+		mapped_refs = wanted_peer_refs(&opts, refs, &remote->fetch,
+					       &provenance_rs);
 
 	if (mapped_refs) {
 		/*
@@ -1632,6 +1649,12 @@ int cmd_clone(int argc,
 			   branch_top.buf, reflog_msg.buf, transport,
 			   !is_local);
 
+	if (provenance_rs.nr &&
+	    provenance_merge_fetched(the_repository, remote_name,
+				     mapped_refs, 0))
+		die(_("unable to merge the provenance refs of '%s'"),
+		    remote_name);
+
 	update_head(&opts, our_head_points_at, remote_head, unborn_head, reflog_msg.buf);
 
 	/*
@@ -1672,6 +1695,7 @@ int cmd_clone(int argc,
 	strbuf_release(&buf);
 	strbuf_release(&key);
 	free_refs(mapped_refs);
+	refspec_clear(&provenance_rs);
 	free_refs(remote_head_points_at);
 	free(unborn_head);
 	free(dir);
