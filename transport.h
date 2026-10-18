@@ -117,6 +117,13 @@ struct transport {
 	const struct string_list *push_options;
 
 	/*
+	 * If set, transport_push() hands the remote refs it matched,
+	 * with the status of each update, to the caller here instead of
+	 * freeing them.  The caller frees them with free_refs().
+	 */
+	struct ref **pushed_refs;
+
+	/*
 	 * These strings will be passed to the remote side on each command
 	 * request, if both sides support the server-option capability.
 	 */
