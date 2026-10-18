@@ -114,8 +114,7 @@ more range lines (`+` or `-`) for that path.
 `adopted`;;
 	The record was re-attached to a commit the extension did not
 	record (for example after a rewrite done with stock Git or by
-	another tool).  Only adopted records may contain `UNKNOWN`
-	ranges.
+	another tool).
 --
 
 `actor <id> ai model=<model> tool=<tool> session=<session> source=<source>`::
@@ -165,9 +164,9 @@ Marks
 	touched the lines.
 
 `UNKNOWN`::
-	The origin of the lines is not known.  Only valid in a record
-	with `capture adopted`; never used in a record written at commit
-	time.
+	The origin of the lines is not known: they were taken by a
+	rewrite from a commit without a line record, or re-anchoring
+	could not match them.
 
 
 Anchors
@@ -281,7 +280,7 @@ attached to.  It reports the first failure it finds and checks that:
 3. every actor id used by a range is declared by an `actor` line;
 
 4. every mark is one of `AI`, `MIXED`, `HUMAN` or `UNKNOWN`, and
-   `UNKNOWN` ranges appear only in records with `capture adopted`;
+   the actor list of every `UNKNOWN` range is `-`;
 
 5. for each `+` range, `<path>` is a regular file in the tree of the
    commit, `1 <= <a> <= <b> <= <number of lines>`, and the anchor

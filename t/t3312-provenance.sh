@@ -181,9 +181,9 @@ test_verify_fails 'an unknown mark' \
 	's/ MIXED / BOGUS /' \
 	"unknown mark 'BOGUS'"
 
-test_verify_fails 'UNKNOWN without capture adopted' \
-	's/ MIXED a1,h1 / UNKNOWN - /' \
-	'UNKNOWN mark requires'
+test_verify_fails 'UNKNOWN with actors' \
+	's/ MIXED a1,h1 / UNKNOWN a1,h1 /' \
+	"UNKNOWN mark requires actor list '-'"
 
 test_verify_fails 'a path not in the tree' \
 	's/^file file$/file nosuch/' \
@@ -204,6 +204,13 @@ test_verify_fails 'an anchor mismatch' \
 test_verify_fails 'a malformed record' \
 	's/^version 1$/version 2/' \
 	"unsupported version '2'"
+
+test_expect_success 'verify accepts UNKNOWN in any record' '
+	test_when_finished "add_record lines HEAD record" &&
+	sed -e "s/ MIXED a1,h1 / UNKNOWN - /" record >unknown &&
+	add_record lines HEAD unknown &&
+	git provenance verify HEAD
+'
 
 test_expect_success 'verify accepts UNKNOWN with capture adopted' '
 	test_when_finished "add_record lines HEAD record" &&
