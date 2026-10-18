@@ -9,6 +9,7 @@
 #include "diffcore.h"
 #include "gettext.h"
 #include "hex.h"
+#include "path.h"
 #include "provenance.h"
 #include "provenance-attribute.h"
 #include "provenance-journal.h"
@@ -51,6 +52,12 @@ struct provenance_diff {
 	/* the live sources */
 	struct provenance_journal journal;
 	struct provenance_attribution *live;
+	/*
+	 * The commit shown, or the one that the live sources would make,
+	 * is a merge: the lines its record does not cover came from its
+	 * other parents.
+	 */
+	unsigned merge : 1;
 };
 
 static struct provenance_diff *diff_state(struct diff_options *opt)
@@ -92,10 +99,11 @@ void provenance_diff_unset(struct diff_options *opt)
 /*
  * Find the tree of the first parent of `commit` as recorded in the
  * commit itself, which is what its line record is relative to, even if
- * the history walk rewrote its parents.
+ * the history walk rewrote its parents, and whether it records other
+ * parents.
  */
 static int first_parent_tree(struct repository *r, struct commit *commit,
-			     struct object_id *tree)
+			     struct object_id *tree, int *merge)
 {
 	const char *buf = repo_get_commit_buffer(r, commit, NULL);
 	const char *p = buf;
@@ -109,6 +117,7 @@ static int first_parent_tree(struct repository *r, struct commit *commit,
 		     !parse_oid_hex_algop(p, &parent_oid, &p, r->hash_algo) &&
 		     skip_prefix(p, "\nparent ", &p) &&
 		     !parse_oid_hex_algop(p, &parent_oid, &p, r->hash_algo);
+	*merge = has_parent && starts_with(p, "\nparent ");
 	repo_unuse_commit_buffer(r, commit, buf);
 
 	if (!has_parent) {
@@ -129,14 +138,16 @@ void provenance_diff_set_commit(struct diff_options *opt,
 {
 	struct provenance_diff *pd;
 	struct object_id tree;
+	int merge;
 
 	if (!opt->flags.provenance)
 		return;
 	pd = diff_state(opt);
 	pd->source = PROVENANCE_DIFF_NONE;
-	if (first_parent_tree(opt->repo, commit, &tree) ||
+	if (first_parent_tree(opt->repo, commit, &tree, &merge) ||
 	    !oideq(&tree, old_tree))
 		return;
+	pd->merge = merge;
 
 	/* keep only the record of the commit being shown */
 	if (!oideq(&pd->commit, &commit->object.oid)) {
@@ -149,6 +160,34 @@ void provenance_diff_set_commit(struct diff_options *opt,
 	pd->source = PROVENANCE_DIFF_COMMIT;
 }
 
+/*
+ * The other parents of the merge that "git commit" would conclude, as
+ * MERGE_HEAD names them, or NULL.
+ */
+static struct commit_list *merge_heads(struct repository *r)
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct commit_list *heads = NULL, **tail = &heads;
+	const char *p;
+
+	if (strbuf_read_file(&buf, git_path_merge_head(r), 0) < 0)
+		return NULL;
+	for (p = buf.buf; *p; ) {
+		struct object_id oid;
+		struct commit *commit;
+
+		if (parse_oid_hex_algop(p, &oid, &p, r->hash_algo))
+			break;
+		commit = lookup_commit_reference(r, &oid);
+		if (!commit)
+			break;
+		tail = commit_list_append(commit, tail);
+		p += strspn(p, "\n");
+	}
+	strbuf_release(&buf);
+	return heads;
+}
+
 void provenance_diff_set_live(struct diff_options *opt,
 			      enum provenance_diff_source source,
 			      const struct object_id *old_tree)
@@ -156,6 +195,7 @@ void provenance_diff_set_live(struct diff_options *opt,
 	struct repository *r = opt->repo;
 	struct provenance_diff *pd;
 	struct object_id head, base;
+	struct commit_list *others = NULL;
 
 	if (!opt->flags.provenance)
 		return;
@@ -181,8 +221,13 @@ void provenance_diff_set_live(struct diff_options *opt,
 
 	if (provenance_journal_read(r, &pd->journal))
 		return;
-	pd->live = provenance_attribution_new(r, &base, NULL, &pd->journal);
-	pd->source = source;
+	if (source != PROVENANCE_DIFF_FILES)
+		others = merge_heads(r);
+	pd->live = provenance_attribution_new(r, &base, others, &pd->journal);
+	pd->merge = !!others;
+	commit_list_free(others);
+	if (pd->live)
+		pd->source = source;
 }
 
 /* Set the marks of the lines covered by the ranges on `side` of `file`. */
@@ -275,6 +320,11 @@ void provenance_diff_marks(struct diff_options *opt,
 
 		if (!rec)
 			break;
+		/* the lines a merge did not write came from other parents */
+		if (pd->merge) {
+			memset(pre_marks, ' ', pre_nr);
+			memset(post_marks, ' ', post_nr);
+		}
 		apply_ranges(post_marks, post_nr,
 			     provenance_record_file(rec, two->path), '+');
 		/* a copy leaves its source alone */
@@ -290,6 +340,10 @@ void provenance_diff_marks(struct diff_options *opt,
 		 * "git commit" would, the pre-image of a renamed path as
 		 * a deletion.
 		 */
+		if (pd->merge) {
+			memset(pre_marks, ' ', pre_nr);
+			memset(post_marks, ' ', post_nr);
+		}
 		apply_live(pd, two->path,
 			   DIFF_FILE_VALID(two) ? post : NULL, post_len,
 			   two->mode, post_marks, post_nr,

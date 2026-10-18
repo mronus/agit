@@ -449,16 +449,26 @@ Viewing
   path and its removed lines under its old one; the source of a copy
   gets no marks. The record is read and parsed once per commit shown.
 
+- The record of a merge covers only what the merge wrote (see "Line
+  record"). Shown against its first parent, the lines of a merge that
+  has a record and that the record does not cover came from another
+  parent: they get a space, as context lines do, not `?`, since the
+  record does say that the merge did not write them, and `blame
+  --provenance` shows who did. A merge without a record keeps `?`.
+
 - When the post-image is the index or the working tree and the
   pre-image is `HEAD`, the marks come live from the journal, through
   the attribution walk of `git commit` run one path at a time on the
   content the diff has in memory, without writing objects or touching
   the index: `git diff --cached` shows exactly the marks `git commit`
   would record, and `git diff HEAD` those `git commit -a` would
-  record. `git diff` compares the index with the working tree; it
-  marks each added line as the attribution of `HEAD` against the
-  working tree marks it, and shows its removed lines, which are lines
-  of the index that the journal cannot speak for, as `?`.
+  record. While `MERGE_HEAD` exists, the walk takes the commits it
+  names as the other parents, as `git commit` does, and the lines that
+  came from them get a space. `git diff` compares the index with the
+  working tree; it marks each added line as the attribution of `HEAD`
+  against the working tree marks it, and shows its removed lines,
+  which are lines of the index that the journal cannot speak for, as
+  `?`.
 
 - Every other line is `?`: lines of a diff between arbitrary commits
   or of a merge against a parent other than the first, of a commit

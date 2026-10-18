@@ -288,7 +288,7 @@ test_expect_success 'word diffs get no column' '
 	test_cmp expect actual
 '
 
-test_expect_success 'combined diffs get no column; other parents show ?' '
+test_expect_success 'combined diffs get no column; merged-in lines are blank' '
 	git checkout -b side initial &&
 	test_when_finished "git checkout -f - && git branch -D side" &&
 	echo side >>file &&
@@ -304,12 +304,46 @@ test_expect_success 'combined diffs get no column; other parents show ?' '
 	test_cmp expect actual &&
 	git show --first-parent --provenance HEAD >actual &&
 	patch_body actual >actual.body &&
-	test_grep "^?+one$" actual.body &&
+	test_grep "^ +one$" actual.body &&
+	test_grep "^ -1$" actual.body &&
+	test_grep ! "^[AMH?][-+]" actual.body &&
 	git show -m --provenance HEAD >actual &&
 	sed -n -e "/^commit .*(from $(git rev-parse HEAD^2))/,\$p" actual >actual.second &&
 	patch_body actual.second >actual.body &&
 	test_grep "^?+side$" actual.body &&
 	test_grep ! "^[AMH][-+]" actual.body
+'
+
+test_expect_success 'a merge marks only the lines it wrote' '
+	git checkout -b side initial &&
+	test_when_finished "git checkout -f - && git branch -D side" &&
+	test_write_lines 1 2 3 4 five >file &&
+	git commit -a -m side &&
+	test_must_fail git merge second &&
+	test_write_lines one two 3 FOUR resolved 6 >file &&
+	git commit -a -m merge &&
+	cat >expect <<-\EOF &&
+	@@ -1,5 +1,6 @@
+	 -1
+	 -2
+	 +one
+	 +two
+	  3
+	 -4
+	 -five
+	 +FOUR
+	H+resolved
+	 +6
+	EOF
+	git show --first-parent -m --provenance HEAD >actual &&
+	patch_body actual >actual.body &&
+	test_cmp expect actual.body &&
+	git diff --provenance HEAD^ HEAD >actual &&
+	patch_body actual >actual.body &&
+	test_cmp expect actual.body &&
+	git blame --provenance -s file >actual &&
+	test_grep "^$(git rev-parse --short HEAD^2)[0-9a-f]* A 2) two$" actual &&
+	test_grep "^$(git rev-parse --short HEAD)[0-9a-f]* H 5) resolved$" actual
 '
 
 test_expect_success 'diff --provenance works without provenance refs' '

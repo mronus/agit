@@ -595,6 +595,29 @@ test_expect_success 'an octopus merge records what it resolves' '
 	)
 '
 
+test_expect_success 'diff --cached shows the marks of a merge to be concluded' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		test_must_fail git merge side &&
+		test_write_lines 1 R2 3 4 6 7 8 9 side >file &&
+		git stamp begin --session s1 &&
+		test_write_lines 1 R2 3 4 6 7 8 9 SIDE >file &&
+		git stamp end --session s1 &&
+		git add file &&
+		git diff --cached --provenance >live.out &&
+		sed -n -e "/^@@/,\$p" live.out >expect &&
+		test_grep "^H+R2$" expect &&
+		test_grep "^A+SIDE$" expect &&
+		test_grep "^ -5$" expect &&
+		git commit --no-edit &&
+		git show --first-parent --provenance HEAD >show.out &&
+		sed -n -e "/^@@/,\$p" show.out >actual &&
+		test_cmp expect actual
+	)
+'
+
 test_expect_success 'merge records the merge commits it makes' '
 	test_when_finished "rm -rf repo" &&
 	setup_merge &&
