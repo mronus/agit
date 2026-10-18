@@ -202,9 +202,14 @@ file src/foo.c
 
 - Merge commits record only conflict resolutions and other changes
   present in neither parent; lines that merged cleanly keep their
-  provenance through `blame`.  Until this is implemented, a merge
-  concluded with `git commit` is recorded against its first parent,
-  like any other commit.
+  provenance through `blame`. The ranges of a merge are against its
+  first parent, like those of any commit, but a line that another
+  parent has as it is came from that parent, and a line of the first
+  parent that the merge deletes and another parent lacks was deleted
+  on that parent's side: neither is recorded. A line that replaces one
+  of another parent belongs to whoever rewrote it, alone; a parent is
+  not an actor, so it never makes a line `MIXED`. A merge that
+  resolved nothing has a record without `file` blocks.
 
 - Binary files get a single file-level mark.
 
@@ -397,6 +402,21 @@ commit to sessions.
 `provenance.require` turns that advice into an error and refuses to
 make a commit that no session is linked to, for teams that want
 guaranteed coverage.
+
+A commit whose line record has no range at all, such as an empty
+commit or a merge that resolved nothing, wrote nothing that a session
+could own: it gets neither the advice nor the refusal.
+
+A merge concluded with `git commit`, after a merge that stopped with
+conflicts or `git merge --no-commit`, is attributed against its first
+parent with the other parents read from `MERGE_HEAD` (see "Line
+record"). Each other parent takes part in the walk as a source whose
+pre-image is the first parent and whose post-image is that parent:
+the lines in which they differ are owned by the parent, after any
+commit being amended, so that the journal's steps find them. A
+session or the human that rewrites such a line then owns it alone, as
+the parent is dropped before the ranges are made. `--amend` of a merge
+does the same with the parents of the commit being amended.
 
 Viewing
 ~~~~~~~

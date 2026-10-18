@@ -603,6 +603,21 @@ is attached only if a line is taken from it, as its changes may have
 been discarded.  Every commit forgets these picks, as it empties the
 capture journal.
 
+A commit that concludes a merge (see linkgit:git-merge[1]) records
+only what the merge itself wrote, such as its conflict resolutions:
+the lines that another parent has as they are, and the lines of the
+first parent that the commit deletes and another parent lacks, came
+from that parent and are not recorded.  A line that replaces one of
+another parent belongs to whoever wrote it, alone, and never becomes
+`MIXED` because of that parent.  A merge that resolved nothing gets a
+record without files.  The same holds with `--amend` of a merge.
+
+The advice given for a commit made without `--session` (see
+`advice.provenanceSession` in linkgit:git-config[1]) and the refusal
+of `provenance.require` do not apply to a commit whose line record has
+no range at all, such as an empty commit or a merge that resolved
+nothing.
+
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------
 The editor used to edit the commit log message will be chosen from the
