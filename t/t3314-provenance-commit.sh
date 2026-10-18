@@ -162,12 +162,15 @@ test_expect_success 'human changes are HUMAN' '
 
 test_expect_success 'advice.provenanceSession silences the advice' '
 	test_config advice.provenanceSession false &&
-	git commit --allow-empty -m quiet 2>err &&
+	echo quiet >quiet &&
+	git add quiet &&
+	git commit -m quiet 2>err &&
 	test_grep ! "hint:" err
 '
 
 test_expect_success 'an empty commit gets a record without files' '
-	git commit --allow-empty -m empty &&
+	git commit --allow-empty -m empty 2>err &&
+	test_grep ! "hint:" err &&
 	header HEAD >expect &&
 	check_lines HEAD &&
 	git provenance verify HEAD
@@ -187,7 +190,10 @@ test_expect_success 'provenance.require refuses a commit without a session' '
 		test_must_fail git rev-parse --verify -q refs/provenance/lines &&
 		git commit -m one --session s1 2>err &&
 		git rev-parse --verify refs/provenance/lines &&
-		git rev-parse --verify refs/provenance/reasoning
+		git rev-parse --verify refs/provenance/reasoning &&
+		git commit --allow-empty -m empty &&
+		git provenance show HEAD >actual &&
+		test_grep ! "^file " actual
 	)
 '
 
@@ -469,21 +475,233 @@ test_expect_success '--amend carries the records of the amended commit over' '
 	git provenance verify HEAD
 '
 
-test_expect_success 'a conflicted merge concluded with commit is recorded' '
+test_expect_success 'a conflicted merge concluded with commit records its resolution' '
+	test_write_lines 1 2 3 4 5 6 7 8 9 >merged &&
+	git add merged &&
+	git commit -m merged &&
 	git checkout -b side &&
-	echo side >>file &&
+	test_write_lines 1 S2 3 4 6 7 8 9 side >merged &&
 	git commit -a -m side &&
 	git checkout - &&
-	echo main >>file &&
+	test_write_lines 1 M2 3 4 5 6 7 8 9 >merged &&
 	git commit -a -m main &&
 	test_must_fail git merge side &&
-	echo resolved >>file &&
-	sed -e "/^[<=>]/d" file >file.new &&
-	mv file.new file &&
-	git commit -a --no-edit &&
-	git provenance show HEAD >actual &&
-	test_grep "^commit $(git rev-parse HEAD)$" actual &&
+	test_write_lines 1 R2 3 4 6 7 8 9 side >merged &&
+	git stamp begin --session s15 --model m15 --tool t15 &&
+	test_write_lines 1 R2 3 4 6 7 8 9 SIDE >merged &&
+	git stamp end --session s15 &&
+	git commit -a --no-edit 2>err &&
+	test_grep ! "hint:" err &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "actor s15 ai model=m15 tool=t15 session=s15 source=observed" &&
+		echo "file merged" &&
+		echo "+ 2 HUMAN human $(anchor HEAD merged 2)" &&
+		echo "+ 9 AI s15 $(anchor HEAD merged 9)"
+	} >expect &&
+	check_lines HEAD &&
 	git provenance verify HEAD
+'
+
+test_expect_success '--amend of a merge keeps its record' '
+	git provenance show HEAD >before &&
+	git commit --amend -m amended-merge &&
+	git rev-parse HEAD^2 &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" before >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+# Make a repository "repo" whose branches "side" and "main" change line
+# 2 of "file", so that merging them conflicts; "side" also deletes line
+# 5 and adds "side" at the end, which merge cleanly.
+setup_merge () {
+	git init --initial-branch=main repo &&
+	(
+		cd repo &&
+		test_write_lines 1 2 3 4 5 6 7 8 9 >file &&
+		git add file &&
+		git commit -m base &&
+		git checkout -b side &&
+		test_write_lines 1 S2 3 4 6 7 8 9 side >file &&
+		git commit -a -m side &&
+		git checkout - &&
+		test_write_lines 1 M2 3 4 5 6 7 8 9 >file &&
+		git commit -a -m main
+	)
+}
+
+test_expect_success 'provenance.require refuses an unlinked conflict resolution' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git config provenance.require true &&
+		test_must_fail git merge side &&
+		test_write_lines 1 R2 3 4 6 7 8 9 side >file &&
+		test_must_fail git commit -a --no-edit 2>err &&
+		test_grep "no session is linked to this commit and provenance.require is set" err &&
+		git rev-parse --verify MERGE_HEAD &&
+		git commit -a --no-edit --session s1 &&
+		git rev-parse --verify HEAD^2
+	)
+'
+
+test_expect_success 'a merge that resolves nothing gets a record without files' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b other side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 nine >file &&
+		git commit -a -m other &&
+		git checkout - &&
+		git config provenance.require true &&
+		git merge --no-commit other &&
+		git commit --no-edit 2>err &&
+		test_grep ! "hint:" err &&
+		git rev-parse --verify HEAD^2 &&
+		header HEAD >expect &&
+		check_lines HEAD &&
+		git provenance verify HEAD
+	)
+'
+
+test_expect_success 'an octopus merge records what it resolves' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b one side^ &&
+		test_write_lines 1 2 3 4 B5 6 7 8 9 >file &&
+		git commit -a -m one &&
+		git checkout -b two side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 B9 >file &&
+		git commit -a -m two &&
+		git checkout main &&
+		git merge --no-commit one two &&
+		test_write_lines 1 M2 3 4 R5 6 7 8 B9 >file &&
+		git commit -a --no-edit &&
+		git rev-parse --verify HEAD^3 &&
+		{
+			header HEAD &&
+			echo "$human_actor" &&
+			echo "file file" &&
+			echo "+ 5 HUMAN human $(anchor HEAD file 5)"
+		} >expect &&
+		check_lines HEAD &&
+		git provenance verify HEAD
+	)
+'
+
+test_expect_success 'diff --cached shows the marks of a merge to be concluded' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		test_must_fail git merge side &&
+		test_write_lines 1 R2 3 4 6 7 8 9 side >file &&
+		git stamp begin --session s1 &&
+		test_write_lines 1 R2 3 4 6 7 8 9 SIDE >file &&
+		git stamp end --session s1 &&
+		git add file &&
+		git diff --cached --provenance >live.out &&
+		sed -n -e "/^@@/,\$p" live.out >expect &&
+		test_grep "^H+R2$" expect &&
+		test_grep "^A+SIDE$" expect &&
+		test_grep "^ -5$" expect &&
+		git commit --no-edit &&
+		git show --first-parent --provenance HEAD >show.out &&
+		sed -n -e "/^@@/,\$p" show.out >actual &&
+		test_cmp expect actual
+	)
+'
+
+test_expect_success 'merge records the merge commits it makes' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b other side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 nine >file &&
+		git commit -a -m other &&
+		git checkout main &&
+		git config provenance.require true &&
+		git merge --no-edit other 2>err &&
+		test_grep ! "hint:" err &&
+		git rev-parse --verify HEAD^2 &&
+		header HEAD >expect &&
+		check_lines HEAD &&
+		git provenance verify HEAD &&
+		git reflog -1 HEAD >actual &&
+		test_grep "Merge made by the .ort. strategy" actual
+	)
+'
+
+test_expect_success 'merge records nothing without a merge commit' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b other side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 nine >file &&
+		git commit -a -m other &&
+		git checkout main &&
+		git rev-parse refs/provenance/lines >before &&
+		git merge --no-commit other &&
+		git rev-parse --verify MERGE_HEAD &&
+		git rev-parse refs/provenance/lines >actual &&
+		test_cmp before actual &&
+		git merge --abort &&
+		git checkout -b ahead side &&
+		git checkout -b behind side^ &&
+		git merge --ff-only ahead &&
+		git rev-parse refs/provenance/lines >actual &&
+		test_cmp before actual
+	)
+'
+
+test_expect_success 'merge --squash carries the records of the squashed commits' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b topic main &&
+		git stamp begin --session s1 &&
+		test_write_lines 1 M2 3 4 5 6 7 8 9 ten >file &&
+		git stamp end --session s1 &&
+		git commit -a -m ten &&
+		git stamp begin --session s2 &&
+		test_write_lines 1 M2 3 4 5 6 7 8 nine ten >file &&
+		git stamp end --session s2 &&
+		git commit -a -m nine &&
+		git checkout -b picked main &&
+		echo other >other &&
+		git add other &&
+		git commit -m other &&
+		git cherry-pick --no-commit topic~2..topic &&
+		git commit -m picked &&
+		git checkout main &&
+		git reset --hard picked^ &&
+		git merge --squash topic &&
+		test_path_is_file .git/provenance/picks &&
+		git commit --no-edit &&
+		test_path_is_missing .git/provenance/picks &&
+		git provenance show picked >picked.out &&
+		grep -v "^commit " picked.out >expect &&
+		git provenance show HEAD >actual.out &&
+		grep -v "^commit " actual.out >actual &&
+		test_cmp expect actual &&
+		test_grep "^+ 9 AI s2 " actual &&
+		test_grep "^+ 10 AI s1 " actual &&
+		git provenance show --reasoning picked >picked.out &&
+		grep -v "^commit " picked.out >expect &&
+		git provenance show --reasoning HEAD >actual.out &&
+		grep -v "^commit " actual.out >actual &&
+		test_cmp expect actual &&
+		git provenance verify HEAD
+	)
 '
 
 test_expect_success 'a failed commit leaves no provenance refs' '

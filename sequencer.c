@@ -1733,8 +1733,7 @@ static int try_to_commit(struct repository *r,
 			prov_rw = *rw;
 		if (flags & AMEND_MSG)
 			prov_rw.amend = current_head;
-		if (provenance_commit_records(r,
-				parents ? parents->item : NULL, &tree,
+		if (provenance_commit_records(r, parents, &tree,
 				author ? author : git_author_info(IDENT_STRICT),
 				NULL, &prov_rw, &prov_lines, &prov_reasoning)) {
 			res = error(_("unable to record provenance"));

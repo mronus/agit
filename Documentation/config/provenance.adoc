@@ -37,5 +37,7 @@ provenance.require::
 	in which no line is attributed to a session.  A commit that
 	picks or reverts another, as linkgit:git-cherry-pick[1],
 	linkgit:git-revert[1] and linkgit:git-rebase[1] make, is not
-	refused.  Has no effect if `provenance.enabled` is false.
+	refused, nor is a commit whose line record has no range, such
+	as an empty commit or a merge that resolved nothing.  Has no
+	effect if `provenance.enabled` is false.
 	Defaults to false.

@@ -1725,7 +1725,7 @@ static void do_commit(const struct am_state *state)
 			die(_("could not parse commit %s"),
 			    oid_to_hex(&state->orig_commit));
 		if (provenance_commit_records(the_repository,
-				parents ? parents->item : NULL, &tree, author,
+				parents, &tree, author,
 				NULL, &rw, &prov_lines, &prov_reasoning))
 			die(_("unable to record provenance"));
 	}

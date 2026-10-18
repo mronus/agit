@@ -18,6 +18,7 @@
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
+#include "ident.h"
 #include "object-name.h"
 #include "parse-options.h"
 #include "lockfile.h"
@@ -31,6 +32,9 @@
 #include "commit.h"
 #include "diffcore.h"
 #include "path.h"
+#include "provenance.h"
+#include "provenance-commit.h"
+#include "provenance-journal.h"
 #include "revision.h"
 #include "unpack-trees.h"
 #include "cache-tree.h"
@@ -438,12 +442,80 @@ static void finish_up_to_date(void)
 	remove_merge_branch_state(the_repository);
 }
 
+/*
+ * The records of the merge commit about to be made, computed by
+ * compute_provenance() and written by finish().
+ */
+static struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
+static struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+static int record_provenance;
+
+/*
+ * If provenance is enabled, compute the records of the merge commit
+ * about to be made with the tree `tree` and the parents `parents`, as
+ * "git commit" would for a merge that it concludes.
+ */
+static void compute_provenance(const struct commit_list *parents,
+			       const struct object_id *tree)
+{
+	char *author;
+
+	if (!provenance_enabled(the_repository))
+		return;
+	/* the author that commit_tree() will give the commit */
+	author = xstrdup(git_author_info(IDENT_STRICT));
+	if (provenance_commit_records(the_repository, parents, tree, author,
+				      NULL, NULL, &prov_lines, &prov_reasoning))
+		die(_("unable to record provenance"));
+	free(author);
+	record_provenance = 1;
+}
+
+/*
+ * Move HEAD from `head` to the merge commit `new_head`, and the
+ * provenance refs with it if its records were computed, in one ref
+ * transaction; the commit then consumes the journal, as with "git
+ * commit".
+ */
+static void update_head(const struct object_id *head,
+			const struct object_id *new_head, const char *msg)
+{
+	struct ref_transaction *transaction;
+	struct strbuf err = STRBUF_INIT;
+
+	if (!record_provenance) {
+		refs_update_ref(get_main_ref_store(the_repository), msg,
+				"HEAD", new_head, head, 0,
+				UPDATE_REFS_DIE_ON_ERR);
+		return;
+	}
+
+	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
+						  0, &err);
+	if (!transaction ||
+	    ref_transaction_update(transaction, "HEAD", new_head, head,
+				   NULL, NULL, 0, msg, &err) ||
+	    provenance_queue_records(the_repository, transaction, new_head,
+				     &prov_lines, &prov_reasoning,
+				     getenv("GIT_REFLOG_ACTION"), &err) ||
+	    ref_transaction_commit(transaction, &err))
+		die("%s", err.buf);
+	ref_transaction_free(transaction);
+	strbuf_release(&err);
+	provenance_record_release(&prov_lines);
+	provenance_reasoning_release(&prov_reasoning);
+
+	if (provenance_journal_clear(the_repository))
+		warning_errno(_("unable to clear the provenance journal"));
+}
+
 static void squash_message(struct commit *commit, struct commit_list *remoteheads)
 {
 	struct rev_info rev;
 	struct strbuf out = STRBUF_INIT;
 	struct commit_list *j;
 	struct pretty_print_context ctx = {0};
+	struct oid_array picks = OID_ARRAY_INIT;
 
 	printf(_("Squash commit -- not updating HEAD\n"));
 
@@ -471,8 +543,20 @@ static void squash_message(struct commit *commit, struct commit_list *remotehead
 		strbuf_addf(&out, "commit %s\n",
 			oid_to_hex(&commit->object.oid));
 		pretty_print_commit(&ctx, commit, &out);
+		oid_array_append(&picks, &commit->object.oid);
 	}
 	write_file_buf(git_path_squash_msg(the_repository), out.buf, out.len);
+
+	/*
+	 * The commit that concludes the squash carries the records of the
+	 * squashed commits, oldest first, as after "cherry-pick
+	 * --no-commit" of each.
+	 */
+	for (size_t i = picks.nr; provenance_enabled(the_repository) && i--; )
+		if (provenance_picks_append(the_repository, &picks.oid[i]))
+			die(_("unable to record provenance"));
+
+	oid_array_clear(&picks);
 	strbuf_release(&out);
 	release_revisions(&rev);
 }
@@ -498,10 +582,7 @@ static void finish(struct commit *head_commit,
 		if (verbosity >= 0 && !merge_msg.len)
 			printf(_("No merge message -- not updating HEAD\n"));
 		else {
-			refs_update_ref(get_main_ref_store(the_repository),
-					reflog_message.buf, "HEAD", new_head,
-					head,
-					0, UPDATE_REFS_DIE_ON_ERR);
+			update_head(head, new_head, reflog_message.buf);
 			/*
 			 * We ignore errors in 'gc --auto', since the
 			 * user should see them.
@@ -1001,6 +1082,7 @@ static int merge_trivial(struct commit *head, struct commit_list *remoteheads)
 	pptr = commit_list_append(head, pptr);
 	pptr = commit_list_append(remoteheads->item, pptr);
 	prepare_to_commit(remoteheads);
+	compute_provenance(parents, &result_tree);
 	if (commit_tree(merge_msg.buf, merge_msg.len, &result_tree, parents,
 			&result_commit, NULL, sign_commit))
 		die(_("failed to write commit object"));
@@ -1028,6 +1110,7 @@ static int finish_automerge(struct commit *head,
 	if (!head_subsumed || fast_forward == FF_NO)
 		commit_list_insert(head, &parents);
 	prepare_to_commit(remoteheads);
+	compute_provenance(parents, result_tree);
 	if (commit_tree(merge_msg.buf, merge_msg.len, result_tree, parents,
 			&result_commit, NULL, sign_commit))
 		die(_("failed to write commit object"));

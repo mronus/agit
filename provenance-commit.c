@@ -81,7 +81,7 @@ static void add_source(struct provenance_source **sources, size_t *nr,
 }
 
 int provenance_commit_records(struct repository *r,
-			      struct commit *parent,
+			      const struct commit_list *parents,
 			      const struct object_id *tree,
 			      const char *author,
 			      const char *session,
@@ -149,7 +149,7 @@ int provenance_commit_records(struct repository *r,
 	if (rw && rw->revert)
 		flags |= PROVENANCE_REWRITE_REVERT;
 	if (provenance_journal_read(r, &journal) ||
-	    provenance_attribute_rewrite(r, parent, tree, sources, nr,
+	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
 					 flags, &journal, session,
 					 human, lines, reasoning))
 		ret = -1;

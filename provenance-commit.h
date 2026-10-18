@@ -4,6 +4,7 @@
 #include "oid-array.h"
 
 struct commit;
+struct commit_list;
 struct object_id;
 struct provenance_reasoning;
 struct provenance_record;
@@ -38,11 +39,11 @@ struct provenance_rewrite {
 
 /*
  * Compute the records of a commit about to be made in `r`, with the
- * tree `tree`, the first parent `parent` (NULL for a root commit) and
- * the author `author` (as in a commit object), from the journal of the
+ * tree `tree`, the parents `parents` (NULL for a root commit) and the
+ * author `author` (as in a commit object), from the journal of the
  * worktree, as "git commit" does.  If `rw` is not NULL, the records of
  * the commits it names are carried over.  `session` is as for
- * provenance_attribute().
+ * provenance_attribute(), which also says what is recorded for a merge.
  *
  * The sources of the commit are `amend`, `pick` and the `picks`, in
  * that order, each named once (see provenance_attribute_rewrite()).
@@ -57,7 +58,7 @@ struct provenance_rewrite {
  * after reporting an error.  The journal is left alone.
  */
 int provenance_commit_records(struct repository *r,
-			      struct commit *parent,
+			      const struct commit_list *parents,
 			      const struct object_id *tree,
 			      const char *author,
 			      const char *session,

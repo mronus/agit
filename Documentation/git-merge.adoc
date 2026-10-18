@@ -386,6 +386,35 @@ release/version name would be acceptable.
 
 include::merge-strategies.adoc[]
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), each merge commit that `git merge` makes gets
+provenance records (see linkgit:git-provenance[1]) that hold only what
+the merge itself wrote: the lines that another parent has as they are,
+and the lines of the first parent that the merge deletes and another
+parent lacks, came from that parent and are not recorded, so the lines
+that merged cleanly keep the marks of the commits that wrote them, as
+`git blame --provenance` shows.  A merge that `git merge` makes on its
+own resolves no conflict, so its line record usually has no files.
+The records are written in the same ref transaction that moves `HEAD`,
+and the capture journal is then emptied, as by linkgit:git-commit[1].
+A fast-forward makes no commit and records nothing.
+
+A merge that stops with conflicts, or with `--no-commit`, records
+nothing yet: the `git commit` that concludes it records the lines of
+the resolution as their authors wrote them, from the stamps of the
+capture journal (see linkgit:git-stamp[1]), and the human otherwise.
+A line of the resolution that replaces a line of another parent
+belongs to whoever wrote it, alone; it does not become `MIXED`.
+
+With `--squash`, the squashed commits are noted in the git directory,
+oldest first, and the next commit carries their records as if each had
+been picked in turn with `git cherry-pick --no-commit` (see
+linkgit:git-cherry-pick[1]).
+
 CONFIGURATION
 -------------
 

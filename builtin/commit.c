@@ -1754,10 +1754,23 @@ static void determine_rewrite(struct commit *current_head,
 }
 
 /*
- * Compute the records of the commit about to be made, with its first
- * parent among `parents`, carrying over those of the commits that `rw`
- * names.  Dies if provenance.require is set and no session is linked
- * to a commit that does not pick or revert another.
+ * Whether the line record `lines` has a range.  A commit whose record
+ * has none, such as an empty commit or a merge that resolved nothing,
+ * wrote nothing that a session could own.
+ */
+static int records_lines(const struct provenance_record *lines)
+{
+	for (size_t i = 0; i < lines->files_nr; i++)
+		if (lines->files[i].ranges_nr)
+			return 1;
+	return 0;
+}
+
+/*
+ * Compute the records of the commit about to be made, with the parents
+ * `parents`, carrying over those of the commits that `rw` names.  Dies
+ * if provenance.require is set and no session is linked to a commit
+ * that does not pick or revert another and whose record has a range.
  */
 static void compute_provenance(struct commit_list *parents,
 			       const char *author_ident,
@@ -1767,8 +1780,7 @@ static void compute_provenance(struct commit_list *parents,
 {
 	int require = 0;
 
-	if (provenance_commit_records(the_repository,
-				      parents ? parents->item : NULL,
+	if (provenance_commit_records(the_repository, parents,
 				      &the_repository->index->cache_tree->oid,
 				      author_ident, provenance_session, rw,
 				      lines, reasoning)) {
@@ -1776,7 +1788,7 @@ static void compute_provenance(struct commit_list *parents,
 		die(_("unable to record provenance"));
 	}
 
-	if (!rw->pick && !reasoning->sessions_nr &&
+	if (!rw->pick && !reasoning->sessions_nr && records_lines(lines) &&
 	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
 	    require) {
 		rollback_index_files();
@@ -2116,7 +2128,8 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
-	if (record_provenance && !prov_reasoning.sessions_nr)
+	if (record_provenance && !prov_reasoning.sessions_nr &&
+	    records_lines(&prov_lines))
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"
 				    "LLM session, provide its details with --session"));
