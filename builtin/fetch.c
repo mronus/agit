@@ -41,6 +41,8 @@
 #include "trace.h"
 #include "trace2.h"
 #include "bundle-uri.h"
+#include "provenance.h"
+#include "provenance-transfer.h"
 
 #define FORCED_UPDATES_DELAY_WARNING_IN_MS (10 * 1000)
 
@@ -503,6 +505,7 @@ static void filter_prefetch_refspec(struct refspec *rs)
 static struct ref *get_ref_map(struct remote *remote,
 			       const struct ref *remote_refs,
 			       struct refspec *rs,
+			       struct refspec *provenance_rs,
 			       int tags, int *autotags)
 {
 	int i;
@@ -608,6 +611,14 @@ static struct ref *get_ref_map(struct remote *remote,
 	} else if (tags == TAGS_DEFAULT && *autotags) {
 		find_non_local_tags(remote_refs, NULL, &ref_map, &tail);
 	}
+
+	/*
+	 * The provenance refs are updated along with the others, but are
+	 * not mentioned in FETCH_HEAD, and need not exist on the remote.
+	 */
+	for (i = 0; i < provenance_rs->nr; i++)
+		get_fetch_map(remote_refs, &provenance_rs->items[i],
+			      &oref_tail, 1);
 
 	/* Now append any refs to be updated opportunistically: */
 	*tail = orefs;
@@ -1905,6 +1916,8 @@ out:
 
 static int do_fetch(struct transport *transport,
 		    struct refspec *rs,
+		    struct refspec *provenance_rs,
+		    int merge_provenance,
 		    const struct fetch_config *config,
 		    struct list_objects_filter_options *filter_options)
 {
@@ -1991,6 +2004,9 @@ static int do_fetch(struct transport *transport,
 		strvec_push(&transport_ls_refs_options.ref_prefixes,
 			    "HEAD");
 
+	refspec_ref_prefixes(provenance_rs,
+			     &transport_ls_refs_options.ref_prefixes);
+
 	/*
 	 * Only initiate ref listing if we have at least one ref we want to
 	 * know about.
@@ -2006,7 +2022,7 @@ static int do_fetch(struct transport *transport,
 	transport_ls_refs_options_release(&transport_ls_refs_options);
 
 	ref_map = get_ref_map(transport->remote, remote_refs, rs,
-			      tags, &autotags);
+			      provenance_rs, tags, &autotags);
 	if (!update_head_ok)
 		check_not_current_branch(ref_map);
 
@@ -2040,6 +2056,9 @@ static int do_fetch(struct transport *transport,
 			retcode = prune_refs(&display_state, &transport->remote->fetch,
 					     transaction, ref_map);
 		}
+		if (provenance_rs->nr)
+			retcode |= prune_refs(&display_state, provenance_rs,
+					      transaction, ref_map);
 		if (retcode != 0)
 			retcode = 1;
 	}
@@ -2190,6 +2209,11 @@ cleanup:
 		ref_update_display_info_display(info, &display_state, summary_width);
 		ref_update_display_info_free(info);
 	}
+
+	if (merge_provenance && !dry_run &&
+	    provenance_merge_fetched(the_repository, transport->remote->name,
+				     ref_map, verbosity))
+		retcode = 1;
 
 	if (retcode) {
 		if (err.len) {
@@ -2430,10 +2454,12 @@ static int fetch_one(struct remote *remote, int argc, const char **argv,
 		     struct list_objects_filter_options *filter_options)
 {
 	struct refspec rs = REFSPEC_INIT_FETCH(the_hash_algo);
+	struct refspec provenance_rs = REFSPEC_INIT_FETCH(the_hash_algo);
 	int i;
 	int exit_code;
 	int maybe_prune_tags;
 	int remote_via_config = remote_is_configured(remote, 0);
+	int merge_provenance;
 
 	if (!remote)
 		die(_("no remote repository specified; please specify either a URL or a\n"
@@ -2488,14 +2514,27 @@ static int fetch_one(struct remote *remote, int argc, const char **argv,
 		strbuf_release(&line);
 	}
 
+	/*
+	 * Fetch the provenance refs into their tracking refs and merge
+	 * them, but leave prefetches alone: they must not update refs
+	 * outside refs/prefetch/.
+	 */
+	merge_provenance = !prefetch && remote_via_config &&
+			   provenance_enabled(the_repository);
+	if (merge_provenance)
+		provenance_fetch_refspecs(the_repository, remote, &rs,
+					  &provenance_rs);
+
 	if (server_options.nr)
 		gtransport->server_options = &server_options;
 
 	sigchain_push_common(unlock_pack_on_signal);
 	atexit(unlock_pack_atexit);
 	sigchain_push(SIGPIPE, SIG_IGN);
-	exit_code = do_fetch(gtransport, &rs, config, filter_options);
+	exit_code = do_fetch(gtransport, &rs, &provenance_rs, merge_provenance,
+			     config, filter_options);
 	sigchain_pop(SIGPIPE);
+	refspec_clear(&provenance_rs);
 	refspec_clear(&rs);
 	transport_disconnect(gtransport);
 	gtransport = NULL;
