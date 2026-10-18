@@ -974,4 +974,50 @@ test_expect_success 'rebase -i rewords with an author ident it cannot parse' '
 	same_records reword-second HEAD
 '
 
+test_expect_success 'rebase --rebase-merges records what a merge resolves' '
+	test_when_finished "rm -rf repo" &&
+	git init repo &&
+	(
+		cd repo &&
+		test_write_lines 1 2 3 4 5 6 7 8 9 >file &&
+		git add file &&
+		git commit -m base &&
+		git tag base &&
+		git checkout -b topic &&
+		test_write_lines 1 T2 3 4 5 6 7 8 9 topic >file &&
+		git commit -a -m topic &&
+		git checkout main &&
+		test_write_lines 1 M2 3 4 5 6 7 8 9 >file &&
+		git commit -a -m main &&
+		test_must_fail git merge topic &&
+		test_write_lines 1 R2 3 4 5 6 7 8 9 topic >file &&
+		git commit -a --no-edit &&
+		git checkout -b onto base &&
+		echo other >other &&
+		git add other &&
+		git commit -m onto &&
+		git checkout main &&
+		test_must_fail git rebase -i --rebase-merges onto &&
+		git rev-parse --verify MERGE_HEAD &&
+		test_write_lines 1 R2 3 4 5 6 7 8 9 topic >file &&
+		git stamp begin --session s1 --model m1 --tool t1 &&
+		test_write_lines 1 R2 3 4 5 6 7 8 9 TOPIC >file &&
+		git stamp end --session s1 &&
+		git add file &&
+		git rebase --continue &&
+		git rev-parse --verify HEAD^2 &&
+		test_cmp_rev HEAD^2^ onto &&
+		{
+			header HEAD &&
+			echo "$human_actor" &&
+			echo "$s1_actor" &&
+			echo "file file" &&
+			echo "+ 2 HUMAN human $(anchor HEAD file 2)" &&
+			echo "+ 10 AI s1 $(anchor HEAD file 10)"
+		} >expect &&
+		check_lines HEAD &&
+		git provenance verify HEAD
+	)
+'
+
 test_done

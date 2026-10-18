@@ -629,9 +629,13 @@ squashes to the same file, oldest first, so that the commit that
 concludes it carries their records as after a `cherry-pick
 --no-commit` of each.
 
-Not covered yet: merges recreated by `rebase --rebase-merges`,
-`git replay`, `git history`, and `git am` of mailbox patches, which
-have no source commit. Rewrites by tools that do not know the
+Merges recreated by `rebase --rebase-merges` are made by a child `git
+commit` with `MERGE_HEAD`, so they record what they resolve, as any
+merge does (see "Commit"); they do not carry the records of the merges
+they replace, whose resolutions may no longer apply.
+
+Not covered yet: `git replay`, `git history`, and `git am` of mailbox
+patches, which have no source commit. Rewrites by tools that do not know the
 extension leave commits without records, which `git provenance adopt`
 repairs (see "Re-anchoring").
 
@@ -864,6 +868,10 @@ Performance
 - Revert: one blame per file that the reverted commit changes, to
   find who wrote the lines it restores.
 
+- Merge: one tree diff per other parent, then, per changed path that
+  another parent also changes, a few `diff` runs against that
+  parent's version.
+
 - `diff --provenance` of uncommitted changes: the journal intervals
   are computed once per diff, then each shown path costs one
   attribution walk.
@@ -926,9 +934,18 @@ Each step is implemented and reviewed on its own:
    or squash finished by a hand-run `git commit`, and those of
    `cherry-pick --no-commit` (done).
 
-6. Hardening: `purge`, `fast-export`/`fast-import` and `format-patch`
-   support, recording the conflict resolutions of merge commits, the
-   query cache, a CI bot.
+6. Hardening:
+   (a) merge commits: conflict resolutions, `merge --squash` picks
+   (done);
+   (b) transfer: a per-remote opt-out, `remote prune`, `remove` and
+   `rename` of the tracking refs, the tracking refs after a push, and
+   pushes that hooks reject;
+   (c) a CI job running selected upstream suites with provenance
+   enabled, and the fixes it needs;
+   (d) `format-patch`/`am` and `fast-export`/`fast-import`;
+   (e) `purge`;
+   (f) the query cache and repository-wide queries;
+   (g) a CI bot.
 
 7. Deferred: the stamp daemon.
 
