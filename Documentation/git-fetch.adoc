@@ -213,8 +213,10 @@ configuration, a remote without provenance refs is not an error, and
 the refs are not written to `FETCH_HEAD`.  A provenance ref that the
 refspecs already map, as the `+refs/*:refs/*` refspec of a mirror
 does, is fetched as they say instead.  Nothing is added when fetching
-from a URL or with `--prefetch`.  `--prune` deletes the tracking refs
-of provenance refs that the remote no longer has.
+from a URL or with `--prefetch`, or from a remote whose
+`remote.<name>.provenance` is false; refspecs that name the provenance
+refs explicitly are still used as given.  `--prune` deletes the
+tracking refs of provenance refs that the remote no longer has.
 
 Each tracking ref that the fetch updated is then merged into the local
 `refs/provenance/lines` or `refs/provenance/reasoning`: the local ref

@@ -192,12 +192,8 @@ test_expect_success 'fetch --all merges the provenance of each remote' '
 	git -C c2 rev-parse refs/provenance/remotes/second/lines >actual &&
 	test_cmp expect actual &&
 	git -C c2 remote remove second &&
-	git -C c2 for-each-ref --format="%(refname)" \
-		refs/provenance/remotes/second/ >refs &&
-	while read ref
-	do
-		git -C c2 update-ref -d "$ref" || return 1
-	done <refs
+	git -C c2 for-each-ref refs/provenance/remotes/second/ >actual &&
+	test_must_be_empty actual
 '
 
 test_expect_success 'push retries after merging when the remote moved' '
@@ -401,7 +397,7 @@ test_expect_success 'push without local provenance refs' '
 	test_cmp expect actual
 '
 
-test_expect_success 'push fails with a hint if the retry is rejected too' '
+test_expect_success 'push warns if a hook refuses the retry' '
 	git clone --bare remote.git hook.git &&
 	git clone hook.git h1 &&
 	git clone hook.git h2 &&
@@ -419,9 +415,10 @@ test_expect_success 'push fails with a hint if the retry is rejected too' '
 	EOF
 	git -C h2 checkout -q -b hooked &&
 	commit_in h2 h2 &&
-	test_must_fail git -C h2 push origin hooked 2>err &&
+	git -C h2 push origin hooked 2>err &&
 	test_grep "Merging the provenance refs of .origin. and pushing them again" err &&
-	test_grep "hint: records of the remote into yours, use .git fetch origin. before pushing" err &&
+	test_grep "warning: the remote .origin. refused the provenance refs: refs/provenance/lines (pre-receive hook declined)$" err &&
+	test_grep ! "^error" err &&
 	git -C hook.git rev-parse --verify hooked &&
 	git -C h1 rev-parse refs/provenance/lines >expect &&
 	git -C hook.git rev-parse refs/provenance/lines >actual &&
@@ -451,6 +448,225 @@ test_expect_success 'shallow clone gets and merges records' '
 	git -C a provenance show main >expect &&
 	git -C shallow provenance show origin/main >actual &&
 	test_cmp expect actual
+'
+
+test_expect_success 'remote.<name>.provenance=false: fetch takes nothing' '
+	git clone remote.git optout &&
+	git -C optout config set remote.origin.provenance false &&
+	git -C optout for-each-ref refs/provenance/ >expect &&
+	commit_in a optout-a &&
+	git -C a push &&
+	git -C optout fetch 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout pull -q 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout remote update 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C optout for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote.<name>.provenance=false: explicit fetch refspecs' '
+	git -C optout rev-parse refs/provenance/lines >expect.local &&
+	git -C optout fetch origin \
+		refs/provenance/lines:refs/provenance/remotes/origin/lines &&
+	git -C remote.git rev-parse refs/provenance/lines >expect &&
+	git -C optout rev-parse refs/provenance/remotes/origin/lines >actual &&
+	test_cmp expect actual &&
+	git -C optout rev-parse refs/provenance/lines >actual &&
+	test_cmp expect.local actual
+'
+
+test_expect_success 'remote.<name>.provenance=false: push sends nothing' '
+	commit_in optout optout-push &&
+	git -C remote.git for-each-ref refs/provenance/ >expect &&
+	git -C optout push 2>err &&
+	test_grep ! refs/provenance err &&
+	git -C remote.git for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual &&
+	git -C optout push origin \
+		refs/provenance/lines:refs/provenance/optout 2>err &&
+	test_grep "refs/provenance/lines -> refs/provenance/optout" err &&
+	git -C optout rev-parse refs/provenance/lines >expect &&
+	git -C remote.git rev-parse refs/provenance/optout >actual &&
+	test_cmp expect actual &&
+	git -C remote.git update-ref -d refs/provenance/optout
+'
+
+test_expect_success 'remote.<name>.provenance=false: clone takes nothing' '
+	git clone -c remote.origin.provenance=false remote.git optout-clone &&
+	provenance_refs optout-clone >actual &&
+	test_must_be_empty actual &&
+	test_cmp_config -C optout-clone false remote.origin.provenance &&
+	git -C optout-clone fetch &&
+	provenance_refs optout-clone >actual &&
+	test_must_be_empty actual
+'
+
+test_expect_success 'push to refs/for/<branch> does not push provenance' '
+	git init --bare -b main review.git &&
+	git -C optout remote add review ../review.git &&
+	git -C optout push review HEAD:refs/for/main 2>err &&
+	test_grep ! refs/provenance err &&
+	provenance_refs review.git >actual &&
+	test_must_be_empty actual &&
+	git -C optout push review HEAD:main 2>err &&
+	test_grep "refs/provenance/lines -> refs/provenance/lines" err
+'
+
+test_expect_success 'push succeeds with a warning if a hook refuses provenance' '
+	git clone --bare remote.git refuse.git &&
+	git clone refuse.git r1 &&
+	test_hook --setup -C refuse.git update <<-\EOF &&
+	case "$1" in
+	refs/provenance/*)
+		echo >&2 "no provenance here"
+		exit 1 ;;
+	esac
+	EOF
+	commit_in r1 refused s4 &&
+	git -C r1 push 2>err &&
+	test_grep "! \[remote rejected\] *refs/provenance/lines -> refs/provenance/lines (hook declined)" err &&
+	test_grep "warning: the remote .origin. refused the provenance refs: refs/provenance/lines (hook declined), refs/provenance/reasoning (hook declined)$" err &&
+	test_grep "hint: .origin., set .remote.origin.provenance. to false" err &&
+	test_grep ! "^error" err &&
+	git -C r1 rev-parse main >expect &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual &&
+	git -C remote.git rev-parse refs/provenance/lines >expect &&
+	git -C refuse.git rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push fails if a hook refuses an explicit provenance ref' '
+	commit_in r1 refused-explicit &&
+	test_must_fail git -C r1 push origin main \
+		refs/provenance/lines:refs/provenance/lines 2>err &&
+	test_grep "error: failed to push some refs" err &&
+	test_grep ! "warning: the remote" err &&
+	git -C r1 rev-parse main >expect &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push --atomic fails if a hook refuses provenance' '
+	commit_in r1 refused-atomic &&
+	git -C refuse.git rev-parse main >expect &&
+	test_must_fail git -C r1 push --atomic 2>err &&
+	test_grep "error: failed to push some refs" err &&
+	test_grep ! "warning: the remote" err &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push updates the tracking refs of the provenance refs' '
+	git clone remote.git track &&
+	git -C track config set core.logAllRefUpdates always &&
+	commit_in track tracked s5 &&
+	git -C track for-each-ref refs/provenance/remotes/ >expect &&
+	git -C track push --dry-run &&
+	git -C track for-each-ref refs/provenance/remotes/ >actual &&
+	test_cmp expect actual &&
+	git -C track push &&
+	git -C track rev-parse refs/provenance/lines \
+		refs/provenance/reasoning >expect &&
+	git -C remote.git rev-parse refs/provenance/lines \
+		refs/provenance/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C track rev-parse refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C track reflog show --format=%gs -1 \
+		refs/provenance/remotes/origin/lines >actual &&
+	echo "update by push" >expect &&
+	test_cmp expect actual &&
+	git -C track fetch -v 2>err &&
+	test_grep "\[up to date\] *refs/provenance/lines *-> refs/provenance/remotes/origin/lines" err &&
+	test_grep ! "^fast-forwarded\|^merged\|^created" err
+'
+
+test_expect_success 'remote remove deletes the provenance tracking refs' '
+	git clone remote.git rm &&
+	git -C rm remote add other ../remote.git &&
+	git -C rm config set remote.other/nested.url ../remote.git &&
+	git -C rm fetch --all &&
+	git -C rm remote remove other &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	refs/provenance/remotes/origin/lines
+	refs/provenance/remotes/origin/reasoning
+	refs/provenance/remotes/other/nested/lines
+	refs/provenance/remotes/other/nested/reasoning
+	EOF
+	provenance_refs rm >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote rename renames the provenance tracking refs' '
+	git clone remote.git mv &&
+	git -C mv config set core.logAllRefUpdates always &&
+	git -C mv rev-parse refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/reasoning >expect &&
+	git -C mv update-ref -m one refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/lines^ &&
+	git -C mv update-ref -m two refs/provenance/remotes/origin/lines \
+		refs/provenance/remotes/origin/lines@{1} &&
+	git -C mv remote rename origin upstream &&
+	git -C mv rev-parse refs/provenance/remotes/upstream/lines \
+		refs/provenance/remotes/upstream/reasoning >actual &&
+	test_cmp expect actual &&
+	git -C mv for-each-ref refs/provenance/remotes/origin/ >actual &&
+	test_must_be_empty actual &&
+	test_must_fail git -C mv reflog exists \
+		refs/provenance/remotes/origin/lines &&
+	cat >expect <<-\EOF &&
+	remote: renamed refs/provenance/remotes/origin/lines to refs/provenance/remotes/upstream/lines
+	two
+	one
+	EOF
+	git -C mv reflog show --format=%gs \
+		refs/provenance/remotes/upstream/lines >actual &&
+	test_cmp expect actual &&
+	git -C mv fetch -v upstream 2>err &&
+	test_grep "\[up to date\] *refs/provenance/lines *-> refs/provenance/remotes/upstream/lines" err
+'
+
+test_expect_success 'remote prune prunes the provenance tracking refs' '
+	git clone --bare remote.git prune2.git &&
+	git clone prune2.git prune2 &&
+	git -C prune2.git update-ref -d refs/provenance/reasoning &&
+	git -C prune2 remote prune --dry-run origin >out &&
+	test_grep "\[would prune\] refs/provenance/remotes/origin/reasoning" out &&
+	git -C prune2 rev-parse --verify refs/provenance/remotes/origin/reasoning &&
+	git -C prune2 remote prune origin >out &&
+	test_grep "\[pruned\] refs/provenance/remotes/origin/reasoning" out &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	refs/provenance/remotes/origin/lines
+	EOF
+	provenance_refs prune2 >actual &&
+	test_cmp expect actual &&
+	git -C prune2.git update-ref -d refs/provenance/lines &&
+	git -C prune2 remote update --prune 2>err &&
+	test_grep "\[deleted\].*refs/provenance/remotes/origin/lines" err &&
+	cat >expect <<-\EOF &&
+	refs/provenance/lines
+	refs/provenance/reasoning
+	EOF
+	provenance_refs prune2 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'remote prune leaves the tracking refs of an opted-out remote' '
+	git clone --bare remote.git prune3.git &&
+	git clone prune3.git prune3 &&
+	git -C prune3 config set remote.origin.provenance false &&
+	git -C prune3.git update-ref -d refs/provenance/reasoning &&
+	git -C prune3 remote prune origin >out &&
+	test_grep ! refs/provenance out &&
+	git -C prune3 rev-parse --verify refs/provenance/remotes/origin/reasoning
 '
 
 test_done

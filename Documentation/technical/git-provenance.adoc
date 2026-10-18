@@ -708,11 +708,30 @@ to the refspecs it uses, whether they come from the configuration or
 from the command line, and `clone` adds them to its initial fetch.
 Nothing is written to `remote.<name>.fetch`, so existing clones need
 no conversion and `provenance.enabled=false` turns transfer off
-entirely. A remote without provenance refs is not an error; the refs
-are not written to `FETCH_HEAD`; `--prune` prunes their tracking refs.
-Nothing is added for a URL, for `--prefetch`, or for a provenance ref
-that the refspecs already map, which covers the `+refs/*:refs/*` of
-`clone --mirror`.
+entirely. `remote.<name>.provenance=false` turns it off for one
+remote: `fetch`, `pull`, `clone`, `remote update` and `push` add
+nothing for it, so its provenance refs are neither fetched, merged nor
+pushed, while refspecs that name them explicitly are used as given.
+Both checks live in the functions that make the implicit refspecs, so
+every caller inherits them. A remote without provenance refs is not
+an error; the refs are not written to `FETCH_HEAD`; `--prune` prunes
+their tracking refs. Nothing is added for a URL, for `--prefetch`, or
+for a provenance ref that the refspecs already map, which covers the
+`+refs/*:refs/*` of `clone --mirror`.
+
+The tracking refs belong to their remote as its remote-tracking
+branches do, and `git remote` maintains them alike. `remote remove`
+deletes `refs/provenance/remotes/<name>/<kind>` with the other refs of
+the remote, and `remote rename` renames them with their reflogs in
+the same ref transaction as `refs/remotes/<old>/*`, also when the
+fetch refspecs are not the default ones. Both leave alone the refs of
+a remote whose name starts with `<name>/`. `remote prune` adds the
+implicit refspecs to those whose stale refs it looks for, as
+`fetch --prune` does, so it prunes a tracking ref whose provenance
+ref the remote no longer has, and `remote show` lists such a ref as
+stale; `remote update --prune` runs `fetch --prune`. A remote that
+opted out has no implicit refspecs, so its tracking refs are not
+pruned.
 
 After a fetch that updated a tracking ref, the tracking ref is merged
 into the local ref, through a ref transaction:
@@ -744,11 +763,38 @@ standard output.
 `push` to a configured remote pushes the local provenance refs in the
 same push as the branches, when it pushes at least one branch and the
 local refs exist: not for a URL, `--mirror` (which pushes them
-anyway), `--delete`, `--prune` or `--tags` alone. They are forced only
+anyway), `--delete`, `--prune` or `--tags` alone. A branch is a ref
+under `refs/heads/` on the remote: a push to `refs/for/<branch>` of a
+review system, or to any other namespace, adds nothing. A destination
+that is not a full ref name counts as a branch when the source is a
+local branch, as `push` resolves it. They are forced only
 with `--force`. If the remote rejects a provenance ref because it
 moved, `push` runs `git fetch` for the rejected refs, which merges
 them as above, and pushes the provenance refs once more; if that is
-rejected too, the push fails with a hint to run `git fetch <name>`.
+rejected too because the remote moved again, the push fails with a
+hint to run `git fetch <name>`.
+
+A provenance ref that the push updated on the remote, whether added
+on its own or named in the refspecs, sets its tracking ref
+`refs/provenance/remotes/<name>/<kind>` to the pushed value, with the
+reflog message `update by push`, as a pushed branch sets its
+remote-tracking branch. `transport_update_tracking_ref()` only sees
+`remote.<name>.fetch`, which does not hold the implicit refspecs, so
+`push` does it from the push result. The next fetch then finds the
+tracking ref up to date and has nothing to merge. `--dry-run` changes
+nothing, and a remote that opted out keeps no tracking refs.
+
+A remote may refuse the provenance refs for another reason: a hook
+that accepts only branches, or a hosting service that does not allow
+other namespaces. The branches the user asked for are what the push
+is about, so when every ref the user named was pushed and only the
+provenance refs that the push added on its own were refused, the push
+succeeds. The rejected lines are printed as for any ref, followed by
+one warning that names the refused refs with the remote's reason and
+a hint that `remote.<name>.provenance=false` stops pushing them. A
+provenance ref that the refspecs name fails the push as any ref does,
+and `--atomic` keeps its all-or-nothing semantics: the remote refuses
+everything, and the push fails.
 
 Stock Git users can fetch the refs with an explicit refspec, and stock
 servers and hosting services need nothing: nothing on the wire
@@ -939,7 +985,7 @@ Each step is implemented and reviewed on its own:
    (done);
    (b) transfer: a per-remote opt-out, `remote prune`, `remove` and
    `rename` of the tracking refs, the tracking refs after a push, and
-   pushes that hooks reject;
+   pushes that hooks reject (done);
    (c) a CI job running selected upstream suites with provenance
    enabled, and the fixes it needs;
    (d) `format-patch`/`am` and `fast-export`/`fast-import`;

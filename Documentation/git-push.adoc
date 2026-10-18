@@ -501,25 +501,41 @@ PROVENANCE
 
 If provenance is enabled (see `provenance.enabled` in
 linkgit:git-config[1]) and a push to a configured remote updates at
-least one branch, the local provenance refs are pushed in the same
-push, as if `refs/provenance/lines:refs/provenance/lines` and, unless
+least one branch, a ref under `refs/heads/` on the remote, the local
+provenance refs are pushed in the same push, as if
+`refs/provenance/lines:refs/provenance/lines` and, unless
 `provenance.reasoning.push` is `never`,
 `refs/provenance/reasoning:refs/provenance/reasoning` were added to
 the refspecs.  A provenance ref is left out if it does not exist
 locally or the refspecs already name it.  Nothing is added when
 pushing to a URL, with `--mirror` (which pushes the refs anyway), with
-`--prune` or `--delete`, or when no branch is pushed, as with `--tags`
-alone.  The provenance refs are forced only with `--force`;
-`--force-with-lease` does not apply to them, and when it is given
-without a ref they are pushed separately, without a lease.
+`--prune` or `--delete`, when no branch is pushed, as with `--tags`
+alone or with `HEAD:refs/for/main` for a review system, or when
+`remote.<name>.provenance` is false.  The provenance refs are forced
+only with `--force`; `--force-with-lease` does not apply to them, and
+when it is given without a ref they are pushed separately, without a
+lease.  A provenance ref that was pushed, whether added this way or
+named in the refspecs, also updates its tracking ref
+`refs/provenance/remotes/<name>/<kind>`, as a pushed branch updates
+its remote-tracking branch, so that the next fetch has nothing to
+merge.
 
 If the remote rejects a provenance ref because it moved, `git push`
 fetches the provenance refs of the remote, merges them into the local
 ones as linkgit:git-fetch[1] does (see its PROVENANCE section), and
 pushes them once more (with `--atomic`, everything is pushed again).
-If they are rejected again, the push fails; `git fetch <name>` merges
-the provenance refs of the remote, after which the push can be
-retried.
+If they are rejected again because the remote moved, the push fails;
+`git fetch <name>` merges the provenance refs of the remote, after
+which the push can be retried.
+
+If the remote refuses a provenance ref for another reason, as a
+`pre-receive` or `update` hook that does not accept them does, and
+every other ref was pushed, the push succeeds: the refused refs are
+reported as rejected, and a warning names them with the reason the
+remote gave.  Setting `remote.<name>.provenance` to false stops
+pushing them.  This applies only to the provenance refs that the push
+added on its own; a provenance ref named in the refspecs fails the
+push as any other ref does, and with `--atomic` nothing is pushed.
 
 OUTPUT
 ------
