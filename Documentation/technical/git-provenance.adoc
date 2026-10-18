@@ -418,6 +418,16 @@ session or the human that rewrites such a line then owns it alone, as
 the parent is dropped before the ranges are made. `--amend` of a merge
 does the same with the parents of the commit being amended.
 
+`git merge` computes the records of the merge commits it makes in the
+same way, with the merge's author as the human and no session, before
+the commit object is written, and writes them in the ref transaction
+that moves `HEAD`; the journal is then emptied, as by `git commit`.
+`git merge` neither takes `--session` nor gives the advice: the merges
+it makes on its own resolve no conflict. A fast-forward makes no
+commit and records nothing, and a merge that stops, with conflicts or
+`--no-commit`, leaves the recording to the `git commit` that concludes
+it.
+
 Viewing
 ~~~~~~~
 - `--provenance` is a diff option, so `diff`, `show`, `log -p`,
@@ -603,7 +613,11 @@ the file with it. As the user may have discarded a
 pick before committing, such a source is tentative: its reasoning is
 attached only if a line of the commit takes its owners from it, as
 for `adopt`. A revert takes no picks; `revert --no-commit` writes
-`REVERT_HEAD`, which names the last commit reverted only.
+`REVERT_HEAD`, which names the last commit reverted only. `git merge
+--squash`, which makes no commit either, appends the commits it
+squashes to the same file, oldest first, so that the commit that
+concludes it carries their records as after a `cherry-pick
+--no-commit` of each.
 
 Not covered yet: merges recreated by `rebase --rebase-merges`,
 `git replay`, `git history`, and `git am` of mailbox patches, which

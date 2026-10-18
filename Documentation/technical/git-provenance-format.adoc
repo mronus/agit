@@ -93,7 +93,10 @@ file <path>
 The `version`, `commit` and `capture` lines come first, in that order.
 They are followed by zero or more `actor` lines, then zero or more
 `file` blocks.  A `file` block is a `file` line followed by zero or
-more range lines (`+` or `-`) for that path.
+more range lines (`+` or `-`) for that path.  A commit that changed no
+line that its record covers, such as an empty commit or a merge that
+took all its changes from its other parents, has a record without
+`file` blocks.
 
 `commit <object id>`::
 	The object id of the code commit the record describes.  It must
@@ -380,12 +383,13 @@ from those changes are `HUMAN` when they are committed later.  The
 commit skips entries whose objects are missing with a warning.
 
 Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
-that `git cherry-pick --no-commit` applied since the last commit, so
-that the commit made afterwards carries over their records.  It is a
-text file with LF line endings and one full object id per line, in
-the order in which the commits were applied; `cherry-pick` appends to
-it while holding `$GIT_DIR/provenance/journal.lock`, and only when
-provenance is enabled.  A reader ignores lines that do not parse, with
-a warning.  The commits that remove the journal remove this file with
-it, and only they: `git stamp` leaves it alone.  Like the journal, it
-is never transferred.
+that `git cherry-pick --no-commit` applied since the last commit, and
+those that `git merge --squash` squashed, so that the commit made
+afterwards carries over their records.  It is a text file with LF line
+endings and one full object id per line, in the order in which the
+commits were applied, oldest first for a squash; `cherry-pick` and
+`merge` append to it while holding `$GIT_DIR/provenance/journal.lock`,
+and only when provenance is enabled.  A reader ignores lines that do
+not parse, with a warning.  The commits that remove the journal remove
+this file with it, and only they: `git stamp` leaves it alone.  Like
+the journal, it is never transferred.

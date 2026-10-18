@@ -595,6 +595,92 @@ test_expect_success 'an octopus merge records what it resolves' '
 	)
 '
 
+test_expect_success 'merge records the merge commits it makes' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b other side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 nine >file &&
+		git commit -a -m other &&
+		git checkout main &&
+		git config provenance.require true &&
+		git merge --no-edit other 2>err &&
+		test_grep ! "hint:" err &&
+		git rev-parse --verify HEAD^2 &&
+		header HEAD >expect &&
+		check_lines HEAD &&
+		git provenance verify HEAD &&
+		git reflog -1 HEAD >actual &&
+		test_grep "Merge made by the .ort. strategy" actual
+	)
+'
+
+test_expect_success 'merge records nothing without a merge commit' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b other side^ &&
+		test_write_lines 1 2 3 4 5 6 7 8 nine >file &&
+		git commit -a -m other &&
+		git checkout main &&
+		git rev-parse refs/provenance/lines >before &&
+		git merge --no-commit other &&
+		git rev-parse --verify MERGE_HEAD &&
+		git rev-parse refs/provenance/lines >actual &&
+		test_cmp before actual &&
+		git merge --abort &&
+		git checkout -b ahead side &&
+		git checkout -b behind side^ &&
+		git merge --ff-only ahead &&
+		git rev-parse refs/provenance/lines >actual &&
+		test_cmp before actual
+	)
+'
+
+test_expect_success 'merge --squash carries the records of the squashed commits' '
+	test_when_finished "rm -rf repo" &&
+	setup_merge &&
+	(
+		cd repo &&
+		git checkout -b topic main &&
+		git stamp begin --session s1 &&
+		test_write_lines 1 M2 3 4 5 6 7 8 9 ten >file &&
+		git stamp end --session s1 &&
+		git commit -a -m ten &&
+		git stamp begin --session s2 &&
+		test_write_lines 1 M2 3 4 5 6 7 8 nine ten >file &&
+		git stamp end --session s2 &&
+		git commit -a -m nine &&
+		git checkout -b picked main &&
+		echo other >other &&
+		git add other &&
+		git commit -m other &&
+		git cherry-pick --no-commit topic~2..topic &&
+		git commit -m picked &&
+		git checkout main &&
+		git reset --hard picked^ &&
+		git merge --squash topic &&
+		test_path_is_file .git/provenance/picks &&
+		git commit --no-edit &&
+		test_path_is_missing .git/provenance/picks &&
+		git provenance show picked >picked.out &&
+		grep -v "^commit " picked.out >expect &&
+		git provenance show HEAD >actual.out &&
+		grep -v "^commit " actual.out >actual &&
+		test_cmp expect actual &&
+		test_grep "^+ 9 AI s2 " actual &&
+		test_grep "^+ 10 AI s1 " actual &&
+		git provenance show --reasoning picked >picked.out &&
+		grep -v "^commit " picked.out >expect &&
+		git provenance show --reasoning HEAD >actual.out &&
+		grep -v "^commit " actual.out >actual &&
+		test_cmp expect actual &&
+		git provenance verify HEAD
+	)
+'
+
 test_expect_success 'a failed commit leaves no provenance refs' '
 	test_when_finished "rm -rf repo" &&
 	git init repo &&
