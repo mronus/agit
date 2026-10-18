@@ -396,17 +396,58 @@ guaranteed coverage.
 
 Viewing
 ~~~~~~~
-- `diff`, `show` and `log -p` gain `--provenance`, which adds the mark
-  column before the `+`/`-` marker. For working-tree diffs the marks
-  come live from the journal, so AI changes can be reviewed before
-  they are staged.
+- `--provenance` is a diff option, so `diff`, `show`, `log -p`,
+  `diff-tree -p` and every other command that shows a patch accept
+  it. It inserts the mark of each line before its `+`/`-` marker, and
+  a space before context lines. Combined diffs and `--word-diff`
+  output get no column, and `format-patch` rejects the option: its
+  output is meant to be applied, and a patch with the column cannot
+  be.
 
-- `blame --provenance` annotates each line with mark, actor and
-  session. `blame` already finds the commit that introduced a line;
-  the mark is a lookup in that commit's record.
+- When a patch shows a commit against its first parent (the parent
+  named in the commit object, whatever the history walk did to it),
+  or a root commit against the empty tree, the marks come from the
+  commit's line record: a `+` line takes the mark of the `+` range of
+  the `file` block of its new path that contains its line number, a
+  `-` line that of the `-` range of the block of its old path. A
+  rename is recorded as a deletion and an addition, so with rename
+  detection the added lines of a renamed file are found under its new
+  path and its removed lines under its old one; the source of a copy
+  gets no marks. The record is read and parsed once per commit shown.
 
-- `log` and the pretty formats gain placeholders for the reasoning
-  summary, the AI share of a commit and the models involved.
+- When the post-image is the index or the working tree and the
+  pre-image is `HEAD`, the marks come live from the journal, through
+  the attribution walk of `git commit` run one path at a time on the
+  content the diff has in memory, without writing objects or touching
+  the index: `git diff --cached` shows exactly the marks `git commit`
+  would record, and `git diff HEAD` those `git commit -a` would
+  record. `git diff` compares the index with the working tree; it
+  marks each added line as the attribution of `HEAD` against the
+  working tree marks it, and shows its removed lines, which are lines
+  of the index that the journal cannot speak for, as `?`.
+
+- Every other line is `?`: lines of a diff between arbitrary commits
+  or of a merge against a parent other than the first, of a commit
+  without a record, of a path without a block, outside every range, of
+  a live diff when `provenance.enabled` is false, and lines shown
+  through a `textconv` filter. `A`, `M` and `H` are shown only where a
+  record or the journal says so, and a missing or malformed record
+  never makes a diff fail.
+
+- `blame --provenance` shows the mark after the commit name. `blame`
+  already finds the commit that introduced a line and the line's
+  number in that commit; the mark is that of the `+` range of the
+  commit's record for that path and line, or `?` if there is none,
+  as for lines that `-M`, `-C` or `--ignore-rev` attribute to a
+  commit that did not add them. The porcelain formats add a
+  `provenance-mark` line and a `provenance-actor` line per actor, as
+  the record declares it. Records are cached per commit.
+
+- The pretty formats gain `%(provenance:summary)`, the summary of the
+  reasoning record, `%(provenance:share)`, the share of the added
+  lines that are `AI` or `MIXED`, and `%(provenance:models)` and
+  `%(provenance:sessions)`, the models and sessions of the AI actors
+  of the line record.
 
 - `provenance show` prints a commit's records; `provenance verify`
   checks that records parse, refer to paths and ranges that exist,
@@ -581,8 +622,12 @@ Performance
   snapshot chains, roughly a few `diff` runs per file.
 
 - `blame --provenance`: one record lookup per distinct commit in the
-  output. A fan-out tree lookup is cheap, and `notes-cache.c` already
-  provides per-process caching.
+  output. A fan-out tree lookup is cheap, and parsed records are
+  cached for the run.
+
+- `diff --provenance` of uncommitted changes: the journal intervals
+  are computed once per diff, then each shown path costs one
+  attribution walk.
 
 - Repository-wide queries (AI share over time) can use an optional,
   rebuildable local cache in the spirit of the commit-graph.

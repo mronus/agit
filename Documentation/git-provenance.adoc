@@ -63,6 +63,15 @@ not.  `verify` exits with status 0 if every record that exists
 verifies, and 1 otherwise; a commit without a record is not a
 failure.  Both exit with status 128 if an argument is not a commit.
 
+SEE ALSO
+--------
+Other commands show provenance records as well: `git diff`, `git show`
+and `git log -p` mark each line of a patch with `--provenance` (see
+linkgit:git-diff[1]), `git blame --provenance` marks each line of a
+file (see linkgit:git-blame[1]), and the `%(provenance:<field>)`
+placeholders of the pretty formats show the summary, the AI share,
+the models and the sessions of a commit (see linkgit:git-log[1]).
+
 GIT
 ---
 Part of the linkgit:git[1] suite
