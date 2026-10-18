@@ -227,6 +227,15 @@ follows these conventions when it writes a line record:
   declares the id gives them, and counts as a session with `end`
   stamps for `capture` if its `<source>` is `observed`.
 
+- Such a commit treats a commit it rewrites that has no line record,
+  or whose line record does not parse, as if that record marked every
+  line the commit adds and every line it deletes `UNKNOWN`.  The lines
+  taken from it, like those of an `UNKNOWN` range of a record, are
+  `UNKNOWN` even where the rewrite or the journal changes them.  So
+  the lines that `git commit --amend` keeps from an amended commit
+  without a line record are `UNKNOWN`, and the lines it adds are
+  marked as in any other commit.
+
 
 Reasoning record, version 1
 ---------------------------

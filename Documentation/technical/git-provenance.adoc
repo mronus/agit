@@ -240,10 +240,11 @@ Marks
 	the line.
 
 `UNKNOWN`::
-	No record exists for the commit: it predates the extension or was
-	made with stock Git. `UNKNOWN` never appears in a record written
-	at commit time; only adopted records (see "Re-anchoring") may
-	contain it.
+	The extension did not watch the line being written. No record
+	exists for the commit, as it predates the extension or was made
+	with stock Git; or a rewrite took the line from such a commit
+	(see "History rewriting"); or re-anchoring could not match it
+	(see "Re-anchoring").
 
 In `diff` and `blame` output the marks are shown as a one-character
 gutter column: `A`, `M`, `H` and `?`.
@@ -462,7 +463,8 @@ computes the records of a rewritten commit from those of the commits
 it rewrites, its sources, with the attribution walk of `git commit`.
 
 The chain of versions of each changed file gets one step per source
-whose line record has a block for the file, before the steps of the
+whose line record has a block for the file, or, for a source without
+a line record, that changes the file, before the steps of the
 journal. In such a step the owners of the lines it changes come from
 the record instead of a single actor. With one source:
 
@@ -487,6 +489,15 @@ parent to the new blob directly.
   way, by comparing the pre-image of the source with the new parent
   and using its `-` ranges.
 
+- A source without a line record, made with stock Git or before the
+  extension was in use, counts as one whose record marks every line
+  it adds and every line it deletes `UNKNOWN`. The lines of such a
+  source, like those of an `UNKNOWN` range of a record, stay `UNKNOWN`
+  wherever they are kept or replaced: `MIXED` would claim that an
+  agent and a human both wrote a line whose origin was never seen.
+  The other actors of such a line are not listed, and a session does
+  not get attached to the commit through it.
+
 - The journal is used and emptied as by `git commit`, so stamps made
   while resolving conflicts count.
 
@@ -502,9 +513,10 @@ amend::
 	to the session whose stamps changed them or to the human, and
 	deletions keep their marks where they survive. Reasoning
 	is the union of the old record's sessions and those the journal
-	attaches, with the summaries in that order. A commit without a
-	line record, made with stock Git, is recorded afresh, since its
-	unstamped lines were made with provenance enabled.
+	attaches, with the summaries in that order. The lines that an
+	amended commit without a line record, made with stock Git, added
+	are `UNKNOWN`; those the amendment adds are marked as in any
+	commit.
 
 cherry-pick, rebase (pick, reword, edit)::
 	The picked commit is the source. Reasoning is copied as is,
@@ -514,8 +526,9 @@ squash, fixup::
 	`HEAD`, which the new commit replaces, and the commit squashed
 	into it are the sources, in that order; the chain goes through
 	the post-image of `HEAD` first. A line that the later commit
-	rewrote gets the actors of both. Sessions are listed once and
-	summaries concatenated.
+	rewrote gets the actors of both. The lines of a commit without a
+	line record are `UNKNOWN`, and those of the other keep their
+	marks. Sessions are listed once and summaries concatenated.
 
 revert::
 	The sides swap: restored lines come from the source's parent and
@@ -523,9 +536,12 @@ revert::
 	its `+` ranges. Reasoning comes from the journal only, as the
 	source's reasoning explains the change, not its revert.
 
-A rewrite whose sources have no line record writes no record, so the
-result stays as unknown as its sources; a record that does not parse
-is ignored with a warning. Records are written in the ref transaction
+A rewrite writes a record even if none of its sources has one: the
+lines it takes from them are `UNKNOWN`, and the lines it adds itself,
+such as those of a conflict resolution, are attributed as by `git
+commit`, since the extension did watch those being written. A record
+that does not parse is ignored with a warning, as if the source had
+none. Records are written in the ref transaction
 that moves `HEAD`, by `git commit`, by the sequencer
 (`cherry-pick`, `revert`, the merge backend of `rebase`), and by `git
 am` for `rebase --apply`, where `rebase-apply/original-commit` names
@@ -758,7 +774,9 @@ The following were decided during design and are reflected above:
    actor makes a line `MIXED`.
 
 2. Lines with no stamp are `HUMAN` in any commit made with provenance
-   enabled. `UNKNOWN` is reserved for commits with no record.
+   enabled. `UNKNOWN` marks lines the extension never watched being
+   written: commits with no record, and the lines a rewrite takes from
+   them.
 
 3. Integrity and privacy follow Git's norm: no commitments, scanning
    or redaction inside the extension.
@@ -792,11 +810,15 @@ Each step is implemented and reviewed on its own:
 
 4. Transfer: default refspecs, merge on fetch, push with retry.
 
-5. Rewrites: remapping in amend, rebase and cherry-pick; `adopt` for
-   foreign rewrites.
+5. Rewrites: (a) remapping in amend, rebase and cherry-pick, with
+   lines taken from commits without records marked `UNKNOWN`;
+   (b) `adopt` for foreign rewrites, the marks of lines a revert
+   restores taken from a blame of the parent, and the records of a
+   fixup or squash finished by a hand-run `git commit --amend`.
 
 6. Hardening: `purge`, `fast-export`/`fast-import` and `format-patch`
-   support, the query cache, a CI bot.
+   support, recording the conflict resolutions of merge commits, the
+   query cache, a CI bot.
 
 7. Deferred: the stamp daemon.
 
