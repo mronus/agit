@@ -680,4 +680,28 @@ test_expect_success 'nothing is recorded when provenance is disabled' '
 	test_cmp before actual
 '
 
+test_expect_success 'cherry-pick does not need an author ident it can parse' '
+	git checkout -b pick-bad-date shift &&
+	GIT_AUTHOR_DATE=@123456 git cherry-pick ai &&
+	same_records picked HEAD &&
+	echo "$GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>" >expect &&
+	git log -1 --format="%an <%ae>" refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'rebase -i rewords with an author ident it cannot parse' '
+	git checkout -b reword-bad-date ai &&
+	echo 12 >>file &&
+	test_tick &&
+	git commit -a -m second &&
+	git tag reword-second &&
+	(
+		set_fake_editor &&
+		FAKE_LINES="reword 1 reword 2" FAKE_COMMIT_AMEND=edited \
+			GIT_AUTHOR_DATE=@123456 git rebase -i base
+	) &&
+	same_records ai HEAD^ &&
+	same_records reword-second HEAD
+'
+
 test_done

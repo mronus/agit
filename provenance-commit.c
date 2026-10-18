@@ -9,7 +9,6 @@
 #include "hex.h"
 #include "ident.h"
 #include "notes.h"
-#include "notes-utils.h"
 #include "object-name.h"
 #include "odb.h"
 #include "provenance.h"
@@ -144,6 +143,11 @@ out:
 /*
  * Write `record` as the note for `commit` under the notes ref `ref`,
  * and queue the update of `ref` into `transaction`.
+ *
+ * The notes commit is authored by the committer ident, not by the
+ * environment's author: the records are written by whoever makes the
+ * commit, and a rebase or cherry-pick that keeps the original author
+ * may leave GIT_AUTHOR_* unset or unparsable.
  */
 static int queue_note(struct repository *r,
 		      struct ref_transaction *transaction,
@@ -152,7 +156,8 @@ static int queue_note(struct repository *r,
 		      struct strbuf *err)
 {
 	struct notes_tree t = { 0 };
-	struct object_id old_oid, blob_oid, notes_oid;
+	struct object_id old_oid, blob_oid, tree_oid, notes_oid;
+	struct commit_list *parents = NULL;
 	struct strbuf msg = STRBUF_INIT;
 	int ret;
 
@@ -171,12 +176,36 @@ static int queue_note(struct repository *r,
 	 */
 	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
 	add_note(&t, commit, &blob_oid, NULL);
-	strbuf_addf(&msg, "Provenance for %s\n", oid_to_hex(commit));
-	create_notes_commit(r, &t, NULL, msg.buf, msg.len, &notes_oid);
+	ret = write_notes_tree(&t, &tree_oid);
 	free_notes(&t);
+	if (ret) {
+		strbuf_addf(err, _("unable to write the notes tree for '%s'"),
+			    ref);
+		return -1;
+	}
 
-	ret = ref_transaction_update(transaction, ref, &notes_oid, &old_oid,
-				     NULL, NULL, 0, reflog_msg, err);
+	if (!is_null_oid(&old_oid)) {
+		struct commit *parent = lookup_commit(r, &old_oid);
+
+		if (!parent || repo_parse_commit(r, parent)) {
+			strbuf_addf(err, _("unable to parse '%s'"), ref);
+			return -1;
+		}
+		commit_list_insert(parent, &parents);
+	}
+
+	strbuf_addf(&msg, "Provenance for %s\n", oid_to_hex(commit));
+	if (commit_tree(msg.buf, msg.len, &tree_oid, parents, &notes_oid,
+			git_committer_info(IDENT_STRICT), NULL)) {
+		strbuf_addf(err, _("unable to write the notes commit for '%s'"),
+			    ref);
+		ret = -1;
+	} else {
+		ret = ref_transaction_update(transaction, ref, &notes_oid,
+					     &old_oid, NULL, NULL, 0,
+					     reflog_msg, err);
+	}
+	commit_list_free(parents);
 	strbuf_release(&msg);
 	return ret;
 }
