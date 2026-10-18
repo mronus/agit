@@ -1707,12 +1707,14 @@ static int git_commit_config(const char *k, const char *v,
  * the sequencer with --provenance-pick or --provenance-revert, or by
  * the cherry-pick or revert in progress, or else the "fixup" or
  * "squash" command that an interactive rebase stopped at because of
- * conflicts.
+ * conflicts.  Unless the sequencer names them, or the commit is a
+ * revert, the commits applied by "cherry-pick --no-commit" since the
+ * last commit are picked, too.
  */
 static void determine_rewrite(struct commit *current_head,
 			      struct provenance_rewrite *rw)
 {
-	const char *name;
+	const char *name = NULL;
 
 	if (amend)
 		rw->amend = current_head;
@@ -1723,23 +1725,31 @@ static void determine_rewrite(struct commit *current_head,
 		rw->revert = 1;
 	} else if (whence == FROM_MERGE) {
 		return;
-	} else if (!amend && (is_from_cherry_pick(whence) ||
-			      whence == FROM_REBASE_PICK)) {
-		name = "CHERRY_PICK_HEAD";
-	} else if (!amend &&
-		   refs_ref_exists(get_main_ref_store(the_repository),
-				   "REVERT_HEAD")) {
-		name = "REVERT_HEAD";
-		rw->revert = 1;
 	} else {
-		rw->pick = rebase_stopped_fixup(the_repository);
-		return;
+		if (!amend && (is_from_cherry_pick(whence) ||
+			       whence == FROM_REBASE_PICK)) {
+			name = "CHERRY_PICK_HEAD";
+		} else if (!amend &&
+			   refs_ref_exists(get_main_ref_store(the_repository),
+					   "REVERT_HEAD")) {
+			name = "REVERT_HEAD";
+			rw->revert = 1;
+		} else {
+			rw->pick = rebase_stopped_fixup(the_repository);
+		}
+		if (!rw->revert &&
+		    provenance_picks_read(the_repository, &rw->picks)) {
+			rollback_index_files();
+			die(_("unable to record provenance"));
+		}
 	}
 
-	rw->pick = lookup_commit_reference_by_name(name);
-	if (!rw->pick) {
-		rollback_index_files();
-		die(_("could not lookup commit '%s'"), name);
+	if (name) {
+		rw->pick = lookup_commit_reference_by_name(name);
+		if (!rw->pick) {
+			rollback_index_files();
+			die(_("could not lookup commit '%s'"), name);
+		}
 	}
 }
 
@@ -2033,6 +2043,7 @@ int cmd_commit(int argc,
 		determine_rewrite(current_head, &rw);
 		compute_provenance(parents, author_ident.buf, &rw,
 				   &prov_lines, &prov_reasoning);
+		oid_array_clear(&rw.picks);
 	}
 
 	if (amend) {

@@ -67,6 +67,20 @@ static int read_source(struct repository *r, struct commit *commit,
 	return ret;
 }
 
+/* Add `commit` to `sources`, unless it is there already. */
+static void add_source(struct provenance_source **sources, size_t *nr,
+		       size_t *alloc, struct commit *commit, int tentative)
+{
+	for (size_t i = 0; i < *nr; i++)
+		if ((*sources)[i].commit == commit)
+			return;
+	ALLOC_GROW(*sources, *nr + 1, *alloc);
+	memset(&(*sources)[*nr], 0, sizeof(**sources));
+	(*sources)[*nr].commit = commit;
+	(*sources)[*nr].tentative = tentative;
+	(*nr)++;
+}
+
 int provenance_commit_records(struct repository *r,
 			      struct commit *parent,
 			      const struct object_id *tree,
@@ -76,14 +90,10 @@ int provenance_commit_records(struct repository *r,
 			      struct provenance_record *lines,
 			      struct provenance_reasoning *reasoning)
 {
-	struct commit *commits[2];
-	struct provenance_record records[2] = {
-		PROVENANCE_RECORD_INIT, PROVENANCE_RECORD_INIT,
-	};
-	struct provenance_reasoning reasonings[2] = {
-		PROVENANCE_REASONING_INIT, PROVENANCE_REASONING_INIT,
-	};
-	struct provenance_source sources[2];
+	struct provenance_record *records = NULL;
+	struct provenance_reasoning *reasonings = NULL;
+	struct provenance_source *sources = NULL;
+	size_t alloc = 0;
 	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
 	struct ident_split ident;
 	size_t nr = 0;
@@ -91,24 +101,38 @@ int provenance_commit_records(struct repository *r,
 	char *human = NULL;
 	int ret = 0;
 
-	if (rw && rw->amend)
-		commits[nr++] = rw->amend;
-	if (rw && rw->pick)
-		commits[nr++] = rw->pick;
-	if (rw && rw->revert && (rw->amend || !rw->pick))
+	if (rw && rw->revert && (rw->amend || !rw->pick || rw->picks.nr))
 		BUG("provenance: a revert must have a pick and no amend");
+	if (rw && rw->amend)
+		add_source(&sources, &nr, &alloc, rw->amend, 0);
+	if (rw && rw->pick)
+		add_source(&sources, &nr, &alloc, rw->pick, 0);
+	for (size_t i = 0; rw && i < rw->picks.nr; i++) {
+		const struct object_id *oid = &rw->picks.oid[i];
+		struct commit *c = lookup_commit_reference_gently(r, oid, 1);
+
+		if (!c)
+			warning(_("ignoring the pick %s: not a commit"),
+				oid_to_hex(oid));
+		else
+			add_source(&sources, &nr, &alloc, c, 1);
+	}
 
 	/* the changes of a commit without a line record are UNKNOWN */
+	CALLOC_ARRAY(records, nr);
+	ALLOC_ARRAY(reasonings, nr);
+	for (size_t i = 0; i < nr; i++)
+		reasonings[i] = (struct provenance_reasoning)
+			PROVENANCE_REASONING_INIT;
 	for (size_t i = 0; i < nr; i++) {
 		int has_reasoning;
-		int has_lines = read_source(r, commits[i], &records[i],
+		int has_lines = read_source(r, sources[i].commit, &records[i],
 					    &reasonings[i], &has_reasoning);
 
 		if (has_lines < 0) {
 			ret = -1;
 			goto out;
 		}
-		sources[i].commit = commits[i];
 		sources[i].lines = has_lines ? &records[i] : NULL;
 		sources[i].reasoning = has_reasoning ? &reasonings[i] : NULL;
 	}
@@ -132,10 +156,13 @@ int provenance_commit_records(struct repository *r,
 		ret = -1;
 
 out:
-	for (size_t i = 0; i < ARRAY_SIZE(records); i++) {
+	for (size_t i = 0; i < nr; i++) {
 		provenance_record_release(&records[i]);
 		provenance_reasoning_release(&reasonings[i]);
 	}
+	free(records);
+	free(reasonings);
+	free(sources);
 	provenance_journal_release(&journal);
 	free(human);
 	return ret;

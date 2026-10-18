@@ -630,6 +630,145 @@ test_expect_success 'commit --amend at a conflicting squash carries its records'
 	git provenance verify HEAD
 '
 
+test_expect_success 'cherry-pick -n records its picks for the next commit' '
+	git checkout -b pick-n shift &&
+	git cherry-pick -n ai &&
+	git rev-parse ai >expect &&
+	test_cmp expect .git/provenance/picks &&
+	git commit -m picked-n &&
+	same_records picked HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'several cherry-pick -n are carried by one commit' '
+	git checkout -b pick-n-two shift &&
+	git cherry-pick -n ai second &&
+	git commit -m picked-two &&
+	{
+		header HEAD &&
+		echo "$s2_actor" &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 4 AI s2 $(anchor HEAD file 4)" &&
+		echo "+ 6 AI s2 $(anchor HEAD file 6)" &&
+		echo "+ 12-13 AI s1 $(anchor HEAD file 12,13)" &&
+		echo "- 4 AI s1 $(anchor shift file 4)" &&
+		echo "- 6 AI s2 $(anchor shift file 6)"
+	} >expect &&
+	check_lines HEAD &&
+	{
+		echo "version 1" &&
+		echo "commit $(git rev-parse HEAD)" &&
+		session_line ai s1 &&
+		session_line second s2 &&
+		echo &&
+		echo "First summary." &&
+		echo &&
+		echo "Second summary."
+	} >expect &&
+	check_reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a conflicting cherry-pick -n resolved by hand and by a session' '
+	git checkout -b pick-n-conflict tri &&
+	test_must_fail git cherry-pick -n ai &&
+	git rev-parse ai >expect &&
+	test_cmp expect .git/provenance/picks &&
+	test_write_lines 0 1 2 three-ish 4 5 6 7 8 9 10 11 >file &&
+	git stamp begin --session s2 &&
+	echo 12 >>file &&
+	git stamp end --session s2 &&
+	git commit -a -m resolved-n &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "$human_actor" &&
+		echo "$s2_actor" &&
+		echo "file file" &&
+		echo "+ 4 MIXED s1,human $(anchor HEAD file 4)" &&
+		echo "+ 12 AI s1 $(anchor HEAD file 12)" &&
+		echo "+ 13 AI s2 $(anchor HEAD file 13)" &&
+		echo "- 4 MIXED s1,human $(anchor tri file 4)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance show --reasoning HEAD >actual &&
+	test_grep "^session s1 " actual &&
+	test_grep "^session s2 " actual &&
+	test_grep "^First summary.$" actual &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'a cherry-pick -n that was discarded lends nothing' '
+	git checkout -b pick-n-stale shift &&
+	git cherry-pick -n ai &&
+	git reset --hard &&
+	echo unrelated >other &&
+	git add other &&
+	git commit -m unrelated &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "file other" &&
+		echo "+ 1 HUMAN human $(anchor HEAD other 1)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'commit --amend after cherry-pick -n unites the records' '
+	git checkout -b pick-n-amend shift &&
+	git cherry-pick -n ai &&
+	git commit --amend --no-edit &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 1 HUMAN human $(anchor HEAD file 1)" &&
+		echo "+ 4 AI s1 $(anchor HEAD file 4)" &&
+		echo "+ 12 AI s1 $(anchor HEAD file 12)" &&
+		echo "- 3 AI s1 $(anchor base file 3)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance show --reasoning ai >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'stamps do not consume the picks' '
+	git checkout -b pick-n-stamp shift &&
+	git cherry-pick -n ai &&
+	git stamp begin --session s2 &&
+	echo 12 >>file &&
+	git stamp end --session s2 &&
+	test_path_is_file .git/provenance/picks &&
+	git commit -a -m picked-stamped &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "$s2_actor" &&
+		echo "file file" &&
+		echo "+ 4 AI s1 $(anchor HEAD file 4)" &&
+		echo "+ 12 AI s1 $(anchor HEAD file 12)" &&
+		echo "+ 13 AI s2 $(anchor HEAD file 13)" &&
+		echo "- 4 AI s1 $(anchor shift file 4)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'cherry-pick -n records no picks when provenance is disabled' '
+	git checkout -b pick-n-disabled shift &&
+	git -c provenance.enabled=false cherry-pick -n ai &&
+	test_path_is_missing .git/provenance/picks &&
+	git reset --hard
+'
+
 test_expect_success 'rebases that fast-forward record nothing' '
 	git checkout -b fast-forward ai &&
 	git rev-parse refs/provenance/lines >before &&

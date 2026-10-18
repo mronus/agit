@@ -569,6 +569,19 @@ plain `git commit` takes the commit as a pick, whose changes are found
 in the new commit. The following `rebase --continue` finds nothing
 left to commit and leaves the records alone.
 
+`cherry-pick --no-commit` makes no commit and writes no
+`CHERRY_PICK_HEAD`, so it lists the commits it applies in a `picks`
+file next to the journal (see the format document). The next `git
+commit` takes them as sources after the commit being amended and the
+one being picked, in the order they were applied, all found in the
+new commit, so that several `-n` picks followed by one commit carry
+the records of each. Every commit that empties the journal removes
+the file with it. As the user may have discarded a
+pick before committing, such a source is tentative: its reasoning is
+attached only if a line of the commit takes its owners from it, as
+for `adopt`. A revert takes no picks; `revert --no-commit` writes
+`REVERT_HEAD`, which names the last commit reverted only.
+
 Not covered yet: merges recreated by `rebase --rebase-merges`,
 `git replay`, `git history`, and `git am` of mailbox patches, which
 have no source commit. Rewrites by tools that do not know the
@@ -861,9 +874,10 @@ Each step is implemented and reviewed on its own:
 
 5. Rewrites: (a) remapping in amend, rebase and cherry-pick, with
    lines taken from commits without records marked `UNKNOWN`;
-   (b) `adopt` for foreign rewrites (done), the marks of lines a
-   revert restores taken from a blame of the parent, and the records
-   of a fixup or squash finished by a hand-run `git commit --amend`.
+   (b) `adopt` for foreign rewrites, the marks of lines a revert
+   restores taken from a blame of the parent, the records of a fixup
+   or squash finished by a hand-run `git commit`, and those of
+   `cherry-pick --no-commit` (done).
 
 6. Hardening: `purge`, `fast-export`/`fast-import` and `format-patch`
    support, recording the conflict resolutions of merge commits, the

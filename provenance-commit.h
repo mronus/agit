@@ -1,6 +1,8 @@
 #ifndef PROVENANCE_COMMIT_H
 #define PROVENANCE_COMMIT_H
 
+#include "oid-array.h"
+
 struct commit;
 struct object_id;
 struct provenance_reasoning;
@@ -26,6 +28,12 @@ struct provenance_rewrite {
 	 */
 	struct commit *pick;
 	unsigned revert : 1;
+	/*
+	 * The commits that "cherry-pick --no-commit" applied before the
+	 * commit was made (see provenance_picks_read()), oldest first;
+	 * not with `revert`.
+	 */
+	struct oid_array picks;
 };
 
 /*
@@ -35,6 +43,12 @@ struct provenance_rewrite {
  * worktree, as "git commit" does.  If `rw` is not NULL, the records of
  * the commits it names are carried over.  `session` is as for
  * provenance_attribute().
+ *
+ * The sources of the commit are `amend`, `pick` and the `picks`, in
+ * that order, each named once (see provenance_attribute_rewrite()).
+ * The `picks` are tentative sources, as they may name commits whose
+ * changes were discarded before the commit was made.  A pick that is
+ * not a commit is ignored with a warning.
  *
  * The records are stored in `lines` and `reasoning` as by
  * provenance_attribute().  The lines that the commit takes from a

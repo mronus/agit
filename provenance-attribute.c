@@ -1969,14 +1969,13 @@ int provenance_attribute_rewrite(struct repository *r,
 	if (!ret) {
 		add_actors(&a, human, lines);
 		/*
-		 * An adopted commit takes only the reasoning of the
-		 * sources it was found to be made from.
+		 * A tentative source gives its reasoning only if the
+		 * commit was found to be made from it.
 		 */
 		for (size_t i = 0; i < nr; i++)
 			if (sources[i].reasoning &&
 			    !(flags & PROVENANCE_REWRITE_REVERT) &&
-			    (!(flags & PROVENANCE_REWRITE_ADOPT) ||
-			     a.seeds[i].contributed))
+			    (!sources[i].tentative || a.seeds[i].contributed))
 				copy_reasoning(sources[i].reasoning, reasoning);
 		add_sessions(&a, session, reasoning);
 	}

@@ -285,6 +285,7 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 			PROVENANCE_REASONING_INIT;
 		sources[nr].commit = c;
 		sources[nr].lines = rec;
+		sources[nr].tentative = 1;
 		if (read_reasoning(r, c, &reasonings[nr]) > 0)
 			sources[nr].reasoning = &reasonings[nr];
 		nr++;

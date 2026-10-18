@@ -596,6 +596,13 @@ commit of that command.  With `--amend`, it unites them with those of
 `HEAD`, as `git rebase --continue` would (see linkgit:git-rebase[1]);
 without it, it carries them as a cherry-pick does.
 
+A commit also carries the records of the commits that `git cherry-pick
+--no-commit` applied since the previous commit, after those named
+above, unless it concludes a revert.  The reasoning of such a commit
+is attached only if a line is taken from it, as its changes may have
+been discarded.  Every commit forgets these picks, as it empties the
+capture journal.
+
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------
 The editor used to edit the commit log message will be chosen from the
