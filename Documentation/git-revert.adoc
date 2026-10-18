@@ -152,6 +152,22 @@ In addition, repeatedly reverting reverts will result in increasingly
 unwieldy subject lines, for example 'Reapply "Reapply "<original-subject>""'.
 Please consider rewording these to be shorter and more unique.
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), each commit that `git revert` makes carries
+the line record of the commit it reverts (see
+linkgit:git-provenance[1]): the lines it removes keep the marks with
+which that commit added them, and the lines it restores get the marks
+with which that commit removed them.  Other lines, such as those of a
+conflict resolution, are recorded as by linkgit:git-cherry-pick[1].
+The reasoning of the reverted commit explains the change, not its
+revert, and is not copied; the revert gets a reasoning record only
+from the stamps it uses (see linkgit:git-stamp[1]), like any commit.
+A revert of a commit without a line record gets no records.
+
 CONFIGURATION
 -------------
 

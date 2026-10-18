@@ -299,6 +299,18 @@ information.
 
 See the `--verify`/`-n`/`--no-verify` options.
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+`git am` records no provenance for the commits it makes from patches
+(see linkgit:git-provenance[1]), as a patch does not carry the records
+of the commit it was made from.  When linkgit:git-rebase[1] replays
+commits through `git am` (see `--apply` there) and provenance is
+enabled (see `provenance.enabled` in linkgit:git-config[1]), each
+commit made carries the records of the commit it replays, as with
+linkgit:git-cherry-pick[1].
+
 CONFIGURATION
 -------------
 

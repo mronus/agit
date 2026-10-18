@@ -256,6 +256,25 @@ $ git cherry-pick -Xpatience topic^  <4>
     spending extra time to avoid mistakes based on incorrectly
     matching context lines.
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), each commit that `git cherry-pick` makes
+carries the provenance records of the commit it picks (see
+linkgit:git-provenance[1]).  The lines it takes from that commit keep
+the marks they have there, and so do the lines it removes.  Lines
+that the picked commit does not have, such as those of a conflict
+resolution, are the human's, and a line of a resolution that replaces
+an AI line becomes `MIXED`.  Stamps made with linkgit:git-stamp[1]
+while resolving conflicts are used as by linkgit:git-commit[1].  The
+reasoning record of the picked commit is copied.
+
+A commit picked from one without a line record gets no records
+either.  With `--no-commit`, the commit made afterwards is recorded
+like any other.
+
 SEE ALSO
 --------
 linkgit:git-revert[1]

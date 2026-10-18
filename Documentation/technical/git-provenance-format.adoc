@@ -221,6 +221,13 @@ follows these conventions when it writes a line record:
   binary are left out.  A commit that changes nothing, as made with
   `--allow-empty`, gets a record without `file` blocks.
 
+- A commit that rewrites others, as made by `git commit --amend`,
+  `git cherry-pick`, `git revert` or `git rebase`, takes over the AI
+  actors of their line records: each keeps its id, `<model>`,
+  `<tool>`, `<session>` and `<source>` as the first record that
+  declares the id gives them, and counts as a session with `end`
+  stamps for `capture` if its `<source>` is `observed`.
+
 
 Reasoning record, version 1
 ---------------------------
@@ -249,7 +256,10 @@ followed by the session given with `--session` if it is not among them.
 `started` and `ended` are the times of the session's first `begin` and
 last `end` stamps.  The summary is the most recent `reason` summary of
 each of these sessions, in the same order, separated by blank lines.
-Transcripts are not stored by version 1.
+A commit that rewrites others, except a revert, first lists the
+sessions of their reasoning records, in order and each once, and
+their summaries come first; a session listed there is not listed
+again.  Transcripts are not stored by version 1.
 
 The design calls for a reasoning record to be a tree, holding the
 summary together with per-session metadata and optional transcripts,

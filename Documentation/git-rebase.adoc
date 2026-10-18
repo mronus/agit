@@ -1286,6 +1286,26 @@ merge tlsv1.3
 merge cmake
 ------------
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), each commit that the rebase makes carries the
+provenance records of the commit it replays, as with
+linkgit:git-cherry-pick[1], with both backends.  A commit that is
+reworded, or amended when the rebase stops at it, keeps them as with
+`git commit --amend` (see linkgit:git-commit[1]).  `squash` and
+`fixup` unite the records of the commits they combine, in order: the
+lines of each commit keep their marks, a line that a later commit
+rewrote gets the actors of both, the sessions of the reasoning
+records are listed once, and their summaries are concatenated.
+
+A commit that the rebase does not replay, because it can fast-forward
+over it, keeps its records as they are.  Merges recreated by
+`--rebase-merges` do not carry the records of the merges they
+replace.
+
 [[CONFIGURATION]]
 CONFIGURATION
 -------------

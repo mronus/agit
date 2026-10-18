@@ -456,36 +456,93 @@ Viewing
 History rewriting
 ~~~~~~~~~~~~~~~~~
 Git already copies notes across rewrites (`notes.rewrite.*`,
-`notes.rewriteRef`). The extension goes further and remaps:
+`notes.rewriteRef`), but a copied record would describe the diff of
+the old commit, not that of the new one. The extension instead
+computes the records of a rewritten commit from those of the commits
+it rewrites, its sources, with the attribution walk of `git commit`.
+
+The chain of versions of each changed file gets one step per source
+whose line record has a block for the file, before the steps of the
+journal. In such a step the owners of the lines it changes come from
+the record instead of a single actor. With one source:
+
+....
+ new parent --------> first snapshot -------> ... -------> new blob
+            marks of             stamped            the
+            the source           session            human
+....
+
+Without journal entries for the file, the step goes from the new
+parent to the new blob directly.
+
+- The changes of a source are found by comparing its post-image with
+  the version the step goes to, which for a cherry-pick holds the
+  same changes on top of a different parent. A line kept from the
+  source has the actors of the `+` range that covers it; a line that
+  replaces a covered line gains the human, so a conflict resolution
+  that rewrites an AI line is `MIXED`; every other line, such as one
+  that differs only because the parents differ, is the human's.
+
+- A line of the new parent that the step deletes is owned in the same
+  way, by comparing the pre-image of the source with the new parent
+  and using its `-` ranges.
+
+- The journal is used and emptied as by `git commit`, so stamps made
+  while resolving conflicts count.
+
+- AI actors of the source records keep their ids and metadata; the
+  first record that declares an id wins. The human is the author of
+  the new commit, and `capture` names the git that did the rewrite.
+
+How each rewrite uses this:
 
 amend::
-	Merge the old record with the new journal. Lines unchanged since
-	the old commit keep their marks. Until this is implemented, the
-	amended commit gets a record computed against its parent like
-	any other commit, and the record of the replaced commit is not
-	carried over.
+	The commit being amended is the source. Lines unchanged since
+	the old commit keep their marks; lines changed since then belong
+	to the session whose stamps changed them or to the human, and
+	deletions keep their marks where they survive. Reasoning
+	is the union of the old record's sessions and those the journal
+	attaches, with the summaries in that order. A commit without a
+	line record, made with stock Git, is recorded afresh, since its
+	unstamped lines were made with provenance enabled.
 
-rebase, cherry-pick (clean)::
-	Transform ranges through the new diff; anchors confirm each
-	range. Reasoning is copied as is.
-
-rebase with conflicts::
-	Lines the human resolved become `HUMAN`, or `MIXED` where they
-	derive from AI lines.
+cherry-pick, rebase (pick, reword, edit)::
+	The picked commit is the source. Reasoning is copied as is,
+	followed by sessions the journal attaches.
 
 squash, fixup::
-	Union of the records, the later commit winning where ranges
-	overlap. Reasoning is concatenated.
+	`HEAD`, which the new commit replaces, and the commit squashed
+	into it are the sources, in that order; the chain goes through
+	the post-image of `HEAD` first. A line that the later commit
+	rewrote gets the actors of both. Sessions are listed once and
+	summaries concatenated.
 
 revert::
-	Deletions carry the original marks; restored lines carry the
-	marks they had originally.
+	The sides swap: restored lines come from the source's parent and
+	get the marks of its `-` ranges, and deleted lines get those of
+	its `+` ranges. Reasoning comes from the journal only, as the
+	source's reasoning explains the change, not its revert.
 
-This touches `sequencer.c`, `builtin/rebase.c`, `builtin/am.c`,
-`builtin/replay.c` and `builtin/history.c`.
+A rewrite whose sources have no line record writes no record, so the
+result stays as unknown as its sources; a record that does not parse
+is ignored with a warning. Records are written in the ref transaction
+that moves `HEAD`, by `git commit`, by the sequencer
+(`cherry-pick`, `revert`, the merge backend of `rebase`), and by `git
+am` for `rebase --apply`, where `rebase-apply/original-commit` names
+the source. When the sequencer runs `git commit` to let the user edit
+a message, it names the source with a hidden option, as nothing else
+does for a clean revert or a squash; `git commit` run by hand finds it
+through `CHERRY_PICK_HEAD` or `REVERT_HEAD`.
+
+Not covered yet: merges recreated by `rebase --rebase-merges`,
+`git replay`, `git history`, and `git am` of mailbox patches, which
+have no source commit. Rewrites by tools that do not know the
+extension are handled by re-anchoring.
 
 Re-anchoring
 ~~~~~~~~~~~~
+This is planned for the second part of step 5 of the roadmap.
+
 Rewrites the extension did not see -- stock Git rebases, a hosting
 service's "squash and merge", `filter-repo` -- produce commits with no
 record. `git provenance adopt <range>` (also run automatically after
