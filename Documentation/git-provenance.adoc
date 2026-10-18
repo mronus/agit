@@ -3,7 +3,7 @@ git-provenance(1)
 
 NAME
 ----
-git-provenance - Show and verify AI provenance records of commits
+git-provenance - Show, verify and adopt AI provenance records of commits
 
 
 SYNOPSIS
@@ -11,6 +11,7 @@ SYNOPSIS
 [synopsis]
 git provenance show [--reasoning] <commit>
 git provenance verify [<commit>...]
+git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...
 
 DESCRIPTION
 -----------
@@ -29,8 +30,10 @@ linkgit:git-revert[1] and linkgit:git-rebase[1] carry the records of
 the commits they rewrite over to the commits they make (see their
 PROVENANCE sections).
 
-This command reads and checks records.  It does not create them; see
-linkgit:git-notes[1] for a way to attach a record by hand.
+This command reads and checks records, and gives records to commits
+made without them from the records of the commits they were made from
+(`adopt`).  See linkgit:git-notes[1] for a way to attach a record by
+hand.
 
 COMMANDS
 --------
@@ -53,11 +56,49 @@ ranges it marks `UNKNOWN`, and each of its ranges lies within
 the file it names (in the commit for `+` ranges, in its first parent
 for `-` ranges) and matches its anchor.
 
+`adopt [--from <rev>]... [-f | --force] <revision-range>...`::
+	Give records to commits that were made without the extension
+	from commits that have records, such as the commit of a hosting
+	service's "squash and merge", or one made by `rebase` or
+	`cherry-pick` of a Git without the extension.  A single commit
+	names that commit; a range such as `main@{1}..main` names the
+	commits in it (see linkgit:gitrevisions[7]).  The commits are
+	processed oldest first, and one line is printed per commit:
+	`<object-id> adopted` if it was given records,
+	`<object-id> no source` if no commit with a record accounts for
+	any of its lines, `<object-id> has record` if it has a line
+	record already, or `<object-id> merge` if it is a merge commit,
+	which is not adopted.
++
+The sources of a commit are the commits that have a line record, are
+not in its history, and change a path that it changes.  Each line that
+the commit changes takes its marks from the first source, oldest
+first, that has the same line among the changes its record covers; a
+line that rewrites such a line, or that no source accounts for, is
+`UNKNOWN`.  A line is never guessed to be `HUMAN`: it is `HUMAN` only
+if a source record marks it so, and its human is then the author of
+the commit.  The reasoning record collects the sessions and summaries
+of the sources that some line was taken from, and the line record is
+marked `capture adopted`.  Nothing is written for a commit that no
+source accounts for, so that it can be adopted once its sources have
+been fetched.
+
 OPTIONS
 -------
 
 `--reasoning`::
 	Show the reasoning record instead of the line record.
+
+`--from <rev>`::
+	With `adopt`, only take records from commits that _<rev>_ can
+	reach, such as the branch that was squashed.  Can be given more
+	than once.
+
+`-f`::
+`--force`::
+	With `adopt`, replace the records of commits whose line record
+	was adopted.  Records that were observed or declared are never
+	replaced.
 
 EXIT STATUS
 -----------
@@ -65,7 +106,10 @@ EXIT STATUS
 `show` exits with status 0 if the record exists, and 1 if it does
 not.  `verify` exits with status 0 if every record that exists
 verifies, and 1 otherwise; a commit without a record is not a
-failure.  Both exit with status 128 if an argument is not a commit.
+failure.  `adopt` exits with status 0 unless an error occurred, such
+as a record that could not be written; a commit for which no source
+is found is not a failure.  All three exit with status 128 if an
+argument is not a commit.
 
 SEE ALSO
 --------

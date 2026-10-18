@@ -472,6 +472,7 @@ libgit_sources = [
   'protocol.c',
   'protocol-caps.c',
   'provenance.c',
+  'provenance-adopt.c',
   'provenance-attribute.c',
   'provenance-commit.c',
   'provenance-journal.c',

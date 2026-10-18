@@ -45,6 +45,26 @@ struct provenance_source {
 };
 
 /*
+ * Flags for provenance_attribute_rewrite().
+ *
+ * PROVENANCE_REWRITE_AMEND: `sources[0]` is the commit being amended.
+ *
+ * PROVENANCE_REWRITE_REVERT: there is one source, and the commit
+ * undoes its changes.
+ *
+ * PROVENANCE_REWRITE_ADOPT: the commit was made without the extension
+ * (see the "Re-anchoring" section of
+ * Documentation/technical/git-provenance.adoc).  The lines that no
+ * source accounts for are UNKNOWN instead of the human's, the
+ * reasoning records of the sources that no line of the commit takes
+ * its owners from are left out, and `capture` is `adopted`.  The
+ * journal must be empty.
+ */
+#define PROVENANCE_REWRITE_AMEND  (1 << 0)
+#define PROVENANCE_REWRITE_REVERT (1 << 1)
+#define PROVENANCE_REWRITE_ADOPT  (1 << 2)
+
+/*
  * As provenance_attribute(), for a commit that rewrites the `nr`
  * commits in `sources`, carrying their records over to it.  See the
  * "History rewriting" section of
@@ -54,21 +74,25 @@ struct provenance_source {
  * before the stamps in `journal`.  The lines that a source without a
  * line record changes, like those its record marks UNKNOWN, are of
  * unknown origin, and stay UNKNOWN however they are edited after.
- * All sources but the last are
- * versions the commit was made from, as the commit being amended is;
- * the changes of the last one are found in the commit, wherever they
- * were applied.  If `revert` is set, there must be one source, and
- * the commit undoes its changes.
+ *
+ * With PROVENANCE_REWRITE_AMEND and other sources, the commit being
+ * amended is a version the commit was made from: the chain of each
+ * file goes through its post-image first.  The changes of every other
+ * source, and of the commit being amended if it is the only source,
+ * are found in the commit, wherever they were applied.  A line found
+ * in several sources gets the owners that the first of them in
+ * `sources` gives it, preferring a source that has the line as it is
+ * to one that has a line it replaces.
  *
  * The reasoning record names the sessions of the reasoning records of
- * the sources, unless `revert` is set, followed by the sessions the
- * journal attaches to the commit.
+ * the sources, unless PROVENANCE_REWRITE_REVERT is set, followed by the
+ * sessions the journal attaches to the commit.
  */
 int provenance_attribute_rewrite(struct repository *r,
 				 struct commit *parent,
 				 const struct object_id *tree,
 				 const struct provenance_source *sources,
-				 size_t nr, int revert,
+				 size_t nr, unsigned flags,
 				 const struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,

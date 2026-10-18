@@ -114,7 +114,9 @@ more range lines (`+` or `-`) for that path.
 `adopted`;;
 	The record was re-attached to a commit the extension did not
 	record (for example after a rewrite done with stock Git or by
-	another tool).
+	another tool), from the records of the commits it was made
+	from.  `git provenance adopt` writes such records; the lines
+	that no such record accounts for are `UNKNOWN`.
 --
 
 `actor <id> ai model=<model> tool=<tool> session=<session> source=<source>`::

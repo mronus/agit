@@ -1264,6 +1264,7 @@ LIB_OBJS += prompt.o
 LIB_OBJS += protocol.o
 LIB_OBJS += protocol-caps.o
 LIB_OBJS += provenance.o
+LIB_OBJS += provenance-adopt.o
 LIB_OBJS += provenance-attribute.o
 LIB_OBJS += provenance-commit.o
 LIB_OBJS += provenance-journal.o

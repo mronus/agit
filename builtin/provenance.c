@@ -12,8 +12,11 @@
 #include "object-name.h"
 #include "parse-options.h"
 #include "provenance.h"
+#include "provenance-adopt.h"
 #include "repository.h"
+#include "revision.h"
 #include "strbuf.h"
+#include "string-list.h"
 #include "write-or-die.h"
 
 #define PROVENANCE_SHOW_USAGE \
@@ -21,6 +24,9 @@
 
 #define PROVENANCE_VERIFY_USAGE \
 	N_("git provenance verify [<commit>...]")
+
+#define PROVENANCE_ADOPT_USAGE \
+	N_("git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...")
 
 static struct commit *lookup_commit_arg(struct repository *repo,
 					const char *arg)
@@ -134,6 +140,79 @@ static int cmd_provenance_verify(int argc, const char **argv, const char *prefix
 	return ret;
 }
 
+static int cmd_provenance_adopt(int argc, const char **argv, const char *prefix,
+				struct repository *repo)
+{
+	const char * const adopt_usage[] = {
+		PROVENANCE_ADOPT_USAGE,
+		NULL,
+	};
+	struct string_list from_args = STRING_LIST_INIT_NODUP;
+	int force = 0;
+	struct option options[] = {
+		OPT_STRING_LIST(0, "from", &from_args, N_("rev"),
+				N_("only take records from commits that <rev> can reach")),
+		OPT__FORCE(&force, N_("replace records that were adopted"), 0),
+		OPT_END(),
+	};
+	static const char *words[] = {
+		[PROVENANCE_ADOPT_ADOPTED] = "adopted",
+		[PROVENANCE_ADOPT_NO_SOURCE] = "no source",
+		[PROVENANCE_ADOPT_HAS_RECORD] = "has record",
+		[PROVENANCE_ADOPT_MERGE] = "merge",
+	};
+	struct provenance_adopt pa;
+	struct rev_info revs;
+	struct commit **targets = NULL, **from = NULL;
+	size_t targets_nr = 0, targets_alloc = 0;
+	struct commit *commit;
+	int ret = 0;
+
+	argc = parse_options(argc, argv, prefix, options, adopt_usage,
+			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN_OPT);
+	if (argc < 2)
+		usage_with_options(adopt_usage, options);
+
+	/* a single commit is that commit, as for "git cherry-pick" */
+	repo_init_revisions(repo, &revs, prefix);
+	revs.no_walk = 1;
+	revs.topo_order = 1;
+	revs.reverse = 1;
+	argc = setup_revisions(argc, argv, &revs, NULL);
+	if (argc > 1)
+		die(_("unrecognized argument: %s"), argv[1]);
+	if (prepare_revision_walk(&revs))
+		die(_("revision walk setup failed"));
+	while ((commit = get_revision(&revs))) {
+		ALLOC_GROW(targets, targets_nr + 1, targets_alloc);
+		targets[targets_nr++] = commit;
+	}
+	release_revisions(&revs);
+
+	ALLOC_ARRAY(from, from_args.nr);
+	for (size_t i = 0; i < from_args.nr; i++)
+		from[i] = lookup_commit_arg(repo, from_args.items[i].string);
+
+	provenance_adopt_init(&pa, repo, targets, targets_nr,
+			      from, from_args.nr);
+	for (size_t i = 0; i < targets_nr; i++) {
+		enum provenance_adopt_result result;
+
+		if (provenance_adopt_commit(&pa, targets[i], force, &result))
+			ret = 1;
+		else
+			printf("%s %s\n", oid_to_hex(&targets[i]->object.oid),
+			       words[result]);
+		fflush(stdout);
+	}
+
+	provenance_adopt_release(&pa);
+	string_list_clear(&from_args, 0);
+	free(targets);
+	free(from);
+	return ret;
+}
+
 int cmd_provenance(int argc,
 		   const char **argv,
 		   const char *prefix,
@@ -142,12 +221,14 @@ int cmd_provenance(int argc,
 	const char * const provenance_usage[] = {
 		PROVENANCE_SHOW_USAGE,
 		PROVENANCE_VERIFY_USAGE,
+		PROVENANCE_ADOPT_USAGE,
 		NULL,
 	};
 	parse_opt_subcommand_fn *fn = NULL;
 	struct option options[] = {
 		OPT_SUBCOMMAND("show", &fn, cmd_provenance_show),
 		OPT_SUBCOMMAND("verify", &fn, cmd_provenance_verify),
+		OPT_SUBCOMMAND("adopt", &fn, cmd_provenance_adopt),
 		OPT_END(),
 	};
 
