@@ -301,14 +301,9 @@ void provenance_record_format(const struct provenance_record *rec,
 	}
 
 	for (size_t i = 0; i < rec->actors_nr; i++) {
-		const struct provenance_actor *a = &rec->actors[i];
-
-		if (a->kind == PROVENANCE_ACTOR_AI)
-			strbuf_addf(out, "actor %s ai model=%s tool=%s session=%s source=%s\n",
-				    a->id, a->model, a->tool, a->session, a->source);
-		else
-			strbuf_addf(out, "actor %s human ident=%s\n",
-				    a->id, a->ident);
+		strbuf_addstr(out, "actor ");
+		provenance_actor_format(&rec->actors[i], out);
+		strbuf_addch(out, '\n');
 	}
 
 	for (size_t i = 0; i < rec->files_nr; i++) {
@@ -325,6 +320,69 @@ void provenance_record_format(const struct provenance_record *rec,
 				    r->actors, oid_to_hex(&r->anchor));
 		}
 	}
+}
+
+void provenance_actor_format(const struct provenance_actor *actor,
+			     struct strbuf *out)
+{
+	if (actor->kind == PROVENANCE_ACTOR_AI)
+		strbuf_addf(out, "%s ai model=%s tool=%s session=%s source=%s",
+			    actor->id, actor->model, actor->tool,
+			    actor->session, actor->source);
+	else
+		strbuf_addf(out, "%s human ident=%s", actor->id, actor->ident);
+}
+
+const char *provenance_mark_name(enum provenance_mark mark)
+{
+	return mark_names[mark];
+}
+
+char provenance_mark_char(enum provenance_mark mark)
+{
+	switch (mark) {
+	case PROVENANCE_MARK_AI:
+		return 'A';
+	case PROVENANCE_MARK_MIXED:
+		return 'M';
+	case PROVENANCE_MARK_HUMAN:
+		return 'H';
+	default:
+		return '?';
+	}
+}
+
+const struct provenance_actor *
+provenance_record_actor(const struct provenance_record *rec,
+			const char *id, size_t len)
+{
+	for (size_t i = 0; i < rec->actors_nr; i++)
+		if (!xstrncmpz(rec->actors[i].id, id, len))
+			return &rec->actors[i];
+	return NULL;
+}
+
+const struct provenance_file *
+provenance_record_file(const struct provenance_record *rec, const char *path)
+{
+	for (size_t i = 0; i < rec->files_nr; i++)
+		if (!strcmp(rec->files[i].path, path))
+			return &rec->files[i];
+	return NULL;
+}
+
+const struct provenance_range *
+provenance_file_range(const struct provenance_file *file,
+		      char side, unsigned long line)
+{
+	for (size_t i = 0; i < file->ranges_nr; i++) {
+		const struct provenance_range *range = &file->ranges[i];
+
+		if (range->side == side &&
+		    range->begin <= line && line <= range->end)
+			return range;
+	}
+	return NULL;
 }
 
 void provenance_record_release(struct provenance_record *rec)
@@ -352,6 +410,122 @@ void provenance_record_release(struct provenance_record *rec)
 	free(rec->files);
 	free(rec->capture_tool);
 	memset(rec, 0, sizeof(*rec));
+}
+
+/* Parse "<key>=<timestamp>" at *p, followed by a space or the end. */
+static int parse_time_field(const char **p, const char *key,
+			    timestamp_t *out)
+{
+	const char *v;
+	char *end;
+
+	if (!skip_prefix(*p, key, &v) || *v++ != '=' || !isdigit(*v))
+		return -1;
+	errno = 0;
+	*out = parse_timestamp(v, &end, 10);
+	if (errno || (*end && (*end != ' ' || !end[1])))
+		return -1;
+	*p = *end ? end + 1 : end;
+	return 0;
+}
+
+static int parse_session(struct provenance_reasoning *rec, const char *p,
+			 int lineno, struct strbuf *err)
+{
+	struct provenance_session *s;
+	const char *sp = strchr(p, ' ');
+
+	if (!sp || sp == p)
+		return parse_error(err, lineno, _("malformed session line"));
+
+	ALLOC_GROW(rec->sessions, rec->sessions_nr + 1, rec->sessions_alloc);
+	s = &rec->sessions[rec->sessions_nr++];
+	memset(s, 0, sizeof(*s));
+	s->id = xstrndup(p, sp - p);
+	p = sp + 1;
+
+	if (!(s->model = parse_field(&p, "model", 0)) ||
+	    !(s->tool = parse_field(&p, "tool", !strchr(p, ' '))) ||
+	    (starts_with(p, "started=") &&
+	     parse_time_field(&p, "started", &s->started)) ||
+	    (starts_with(p, "ended=") &&
+	     parse_time_field(&p, "ended", &s->ended)) ||
+	    *p)
+		return parse_error(err, lineno, _("malformed session '%s'"),
+				   s->id);
+	return 0;
+}
+
+int provenance_reasoning_parse(const char *buf, size_t len,
+			       const struct git_hash_algo *algop,
+			       struct provenance_reasoning *rec,
+			       struct strbuf *err)
+{
+	const char *end = buf + len;
+	struct strbuf line = STRBUF_INIT;
+	int lineno = 0, header = 0, ret = -1;
+
+	if (memchr(buf, '\0', len)) {
+		strbuf_addstr(err, _("record contains a NUL byte"));
+		return -1;
+	}
+
+	while (buf < end) {
+		const char *eol = memchr(buf, '\n', end - buf);
+		size_t linelen = eol ? (size_t)(eol - buf) : (size_t)(end - buf);
+		const char *p;
+
+		strbuf_reset(&line);
+		strbuf_add(&line, buf, linelen);
+		buf += linelen + !!eol;
+		lineno++;
+
+		/* the first blank line ends the header */
+		if (!line.len)
+			break;
+		if (line.buf[0] == '#')
+			continue;
+
+		switch (header) {
+		case 0:
+			if (!skip_prefix(line.buf, "version ", &p)) {
+				parse_error(err, lineno, _("expected 'version' line"));
+				goto out;
+			}
+			if (strcmp(p, "1")) {
+				parse_error(err, lineno, _("unsupported version '%s'"), p);
+				goto out;
+			}
+			rec->version = 1;
+			header++;
+			continue;
+		case 1:
+			if (!skip_prefix(line.buf, "commit ", &p) ||
+			    parse_oid_hex_algop(p, &rec->commit, &p, algop) || *p) {
+				parse_error(err, lineno, _("expected 'commit' line"));
+				goto out;
+			}
+			header++;
+			continue;
+		}
+
+		if (!skip_prefix(line.buf, "session ", &p)) {
+			parse_error(err, lineno, _("unrecognized line"));
+			goto out;
+		}
+		if (parse_session(rec, p, lineno, err))
+			goto out;
+	}
+
+	if (header < 2) {
+		strbuf_addstr(err, _("incomplete record header"));
+		goto out;
+	}
+	strbuf_add(&rec->summary, buf, end - buf);
+	ret = 0;
+out:
+	strbuf_release(&line);
+	return ret;
 }
 
 void provenance_reasoning_format(const struct provenance_reasoning *rec,

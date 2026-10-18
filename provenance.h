@@ -122,6 +122,45 @@ void provenance_record_format(const struct provenance_record *rec,
 
 void provenance_record_release(struct provenance_record *rec);
 
+/* The name of `mark` in records ("AI", ...) and its one-character form. */
+const char *provenance_mark_name(enum provenance_mark mark);
+char provenance_mark_char(enum provenance_mark mark);
+
+/*
+ * Append the serialized form of `actor` to `out`: its "actor" line in
+ * a record, without the leading "actor " and the trailing LF.
+ */
+void provenance_actor_format(const struct provenance_actor *actor,
+			     struct strbuf *out);
+
+/* Return the actor of `rec` with the id `id` of length `len`, or NULL. */
+const struct provenance_actor *
+provenance_record_actor(const struct provenance_record *rec,
+			const char *id, size_t len);
+
+/* Return the block of `rec` for `path`, or NULL if it has none. */
+const struct provenance_file *
+provenance_record_file(const struct provenance_record *rec, const char *path);
+
+/*
+ * Return the range of `file` on `side` ('+' or '-') that contains the
+ * 1-based line `line`, or NULL if no range does.
+ */
+const struct provenance_range *
+provenance_file_range(const struct provenance_file *file,
+		      char side, unsigned long line);
+
+/*
+ * Parse the reasoning record in `buf` into `rec`, which must have been
+ * initialized with PROVENANCE_REASONING_INIT, in the same way as
+ * provenance_record_parse() parses a line record.  `rec` must be
+ * released with provenance_reasoning_release() in either case.
+ */
+int provenance_reasoning_parse(const char *buf, size_t len,
+			       const struct git_hash_algo *algop,
+			       struct provenance_reasoning *rec,
+			       struct strbuf *err);
+
 /* Append the serialized form of the reasoning record `rec` to `out`. */
 void provenance_reasoning_format(const struct provenance_reasoning *rec,
 				 struct strbuf *out);
