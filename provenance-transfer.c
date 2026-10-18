@@ -428,9 +428,31 @@ static int remote_moved(const struct ref *ref)
 	       ref->status == REF_STATUS_REJECT_FETCH_FIRST;
 }
 
-int provenance_push_rejected(const struct ref *refs, int *other_errors)
+/*
+ * Return whether `ref`, a ref of the push result, is a provenance ref
+ * that the push added on its own, through `added`, and that it failed
+ * to update for another reason than the remote ref having moved.
+ */
+static int refused(const struct ref *ref, const struct refspec *added)
 {
-	int rejected = 0, others = 0;
+	switch (ref->status) {
+	case REF_STATUS_NONE:
+	case REF_STATUS_OK:
+	case REF_STATUS_UPTODATE:
+	case REF_STATUS_ATOMIC_PUSH_FAILED:
+	case REF_STATUS_EXPECTING_REPORT:
+		return 0;
+	default:
+		return added && is_provenance_ref(ref->name) &&
+		       refspec_names(added, ref->name) && !remote_moved(ref);
+	}
+}
+
+int provenance_push_rejected(const struct ref *refs,
+			     const struct refspec *added,
+			     int *refused_only, int *other_errors)
+{
+	int rejected = 0, refusals = 0, others = 0;
 
 	for (const struct ref *ref = refs; ref; ref = ref->next) {
 		switch (ref->status) {
@@ -442,13 +464,38 @@ int provenance_push_rejected(const struct ref *refs, int *other_errors)
 		default:
 			if (is_provenance_ref(ref->name) && remote_moved(ref))
 				rejected = 1;
+			else if (refused(ref, added))
+				refusals = 1;
 			else
 				others = 1;
 		}
 	}
+	if (refused_only)
+		*refused_only = refusals && !rejected && !others;
 	if (other_errors)
 		*other_errors = others;
 	return rejected;
+}
+
+void provenance_warn_refused(const struct ref *refs,
+			     const struct refspec *added,
+			     const char *remote_name)
+{
+	struct strbuf list = STRBUF_INIT;
+
+	for (const struct ref *ref = refs; ref; ref = ref->next) {
+		if (!refused(ref, added))
+			continue;
+		if (list.len)
+			strbuf_addstr(&list, ", ");
+		strbuf_addf(&list, "%s (%s)", ref->name,
+			    ref->remote_status ? ref->remote_status :
+			    _("rejected"));
+	}
+	if (list.len)
+		warning(_("the remote '%s' refused the provenance refs: %s"),
+			remote_name, list.buf);
+	strbuf_release(&list);
 }
 
 int provenance_fetch_rejected(struct repository *r, const char *remote_name,

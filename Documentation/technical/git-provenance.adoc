@@ -758,7 +758,20 @@ local branch, as `push` resolves it. They are forced only
 with `--force`. If the remote rejects a provenance ref because it
 moved, `push` runs `git fetch` for the rejected refs, which merges
 them as above, and pushes the provenance refs once more; if that is
-rejected too, the push fails with a hint to run `git fetch <name>`.
+rejected too because the remote moved again, the push fails with a
+hint to run `git fetch <name>`.
+
+A remote may refuse the provenance refs for another reason: a hook
+that accepts only branches, or a hosting service that does not allow
+other namespaces. The branches the user asked for are what the push
+is about, so when every ref the user named was pushed and only the
+provenance refs that the push added on its own were refused, the push
+succeeds. The rejected lines are printed as for any ref, followed by
+one warning that names the refused refs with the remote's reason and
+a hint that `remote.<name>.provenance=false` stops pushing them. A
+provenance ref that the refspecs name fails the push as any ref does,
+and `--atomic` keeps its all-or-nothing semantics: the remote refuses
+everything, and the push fails.
 
 Stock Git users can fetch the refs with an explicit refspec, and stock
 servers and hosting services need nothing: nothing on the wire

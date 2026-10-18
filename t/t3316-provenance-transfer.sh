@@ -401,7 +401,7 @@ test_expect_success 'push without local provenance refs' '
 	test_cmp expect actual
 '
 
-test_expect_success 'push fails with a hint if the retry is rejected too' '
+test_expect_success 'push warns if a hook refuses the retry' '
 	git clone --bare remote.git hook.git &&
 	git clone hook.git h1 &&
 	git clone hook.git h2 &&
@@ -419,9 +419,10 @@ test_expect_success 'push fails with a hint if the retry is rejected too' '
 	EOF
 	git -C h2 checkout -q -b hooked &&
 	commit_in h2 h2 &&
-	test_must_fail git -C h2 push origin hooked 2>err &&
+	git -C h2 push origin hooked 2>err &&
 	test_grep "Merging the provenance refs of .origin. and pushing them again" err &&
-	test_grep "hint: records of the remote into yours, use .git fetch origin. before pushing" err &&
+	test_grep "warning: the remote .origin. refused the provenance refs: refs/provenance/lines (pre-receive hook declined)$" err &&
+	test_grep ! "^error" err &&
 	git -C hook.git rev-parse --verify hooked &&
 	git -C h1 rev-parse refs/provenance/lines >expect &&
 	git -C hook.git rev-parse refs/provenance/lines >actual &&
@@ -515,6 +516,51 @@ test_expect_success 'push to refs/for/<branch> does not push provenance' '
 	test_must_be_empty actual &&
 	git -C optout push review HEAD:main 2>err &&
 	test_grep "refs/provenance/lines -> refs/provenance/lines" err
+'
+
+test_expect_success 'push succeeds with a warning if a hook refuses provenance' '
+	git clone --bare remote.git refuse.git &&
+	git clone refuse.git r1 &&
+	test_hook --setup -C refuse.git update <<-\EOF &&
+	case "$1" in
+	refs/provenance/*)
+		echo >&2 "no provenance here"
+		exit 1 ;;
+	esac
+	EOF
+	commit_in r1 refused s4 &&
+	git -C r1 push 2>err &&
+	test_grep "! \[remote rejected\] *refs/provenance/lines -> refs/provenance/lines (hook declined)" err &&
+	test_grep "warning: the remote .origin. refused the provenance refs: refs/provenance/lines (hook declined), refs/provenance/reasoning (hook declined)$" err &&
+	test_grep "hint: .origin., set .remote.origin.provenance. to false" err &&
+	test_grep ! "^error" err &&
+	git -C r1 rev-parse main >expect &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual &&
+	git -C remote.git rev-parse refs/provenance/lines >expect &&
+	git -C refuse.git rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push fails if a hook refuses an explicit provenance ref' '
+	commit_in r1 refused-explicit &&
+	test_must_fail git -C r1 push origin main \
+		refs/provenance/lines:refs/provenance/lines 2>err &&
+	test_grep "error: failed to push some refs" err &&
+	test_grep ! "warning: the remote" err &&
+	git -C r1 rev-parse main >expect &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push --atomic fails if a hook refuses provenance' '
+	commit_in r1 refused-atomic &&
+	git -C refuse.git rev-parse main >expect &&
+	test_must_fail git -C r1 push --atomic 2>err &&
+	test_grep "error: failed to push some refs" err &&
+	test_grep ! "warning: the remote" err &&
+	git -C refuse.git rev-parse main >actual &&
+	test_cmp expect actual
 '
 
 test_done

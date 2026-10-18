@@ -520,9 +520,18 @@ If the remote rejects a provenance ref because it moved, `git push`
 fetches the provenance refs of the remote, merges them into the local
 ones as linkgit:git-fetch[1] does (see its PROVENANCE section), and
 pushes them once more (with `--atomic`, everything is pushed again).
-If they are rejected again, the push fails; `git fetch <name>` merges
-the provenance refs of the remote, after which the push can be
-retried.
+If they are rejected again because the remote moved, the push fails;
+`git fetch <name>` merges the provenance refs of the remote, after
+which the push can be retried.
+
+If the remote refuses a provenance ref for another reason, as a
+`pre-receive` or `update` hook that does not accept them does, and
+every other ref was pushed, the push succeeds: the refused refs are
+reported as rejected, and a warning names them with the reason the
+remote gave.  Setting `remote.<name>.provenance` to false stops
+pushing them.  This applies only to the provenance refs that the push
+added on its own; a provenance ref named in the refspecs fails the
+push as any other ref does, and with `--atomic` nothing is pushed.
 
 OUTPUT
 ------

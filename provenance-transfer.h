@@ -62,10 +62,25 @@ void provenance_push_refspecs(struct repository *r, struct remote *remote,
 /*
  * Return 1 if the push whose result is `refs` (as transport_push()
  * leaves it) had a provenance ref rejected because the remote ref
- * moved, and 0 otherwise.  If `other_errors` is not NULL, set it to 1
- * if any other ref failed for another reason.
+ * moved, and 0 otherwise.  `added` holds the provenance refspecs that
+ * the push added on its own (see provenance_push_refspecs()), or is
+ * NULL.  If `refused_only` is not NULL, set it to 1 if the only refs
+ * that failed are provenance refs of `added` that the remote refused
+ * for another reason than having moved, as a hook does.  If
+ * `other_errors` is not NULL, set it to 1 if any other ref failed.
  */
-int provenance_push_rejected(const struct ref *refs, int *other_errors);
+int provenance_push_rejected(const struct ref *refs,
+			     const struct refspec *added,
+			     int *refused_only, int *other_errors);
+
+/*
+ * Warn about the provenance refs of `added` that the push whose result
+ * is `refs` failed to update for another reason than the remote ref
+ * having moved, naming each with the reason given by `remote_name`.
+ */
+void provenance_warn_refused(const struct ref *refs,
+			     const struct refspec *added,
+			     const char *remote_name);
 
 /*
  * Fetch the provenance refs that the push whose result is `refs`
