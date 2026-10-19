@@ -1452,9 +1452,12 @@ int cmd_clone(int argc,
 		 */
 		refspec_append(&remote->fetch, TAG_REFSPEC);
 
-	/* A mirror fetches the provenance refs as they are. */
+	/*
+	 * A mirror fetches the provenance refs as they are; --revision
+	 * fetches the history of <rev> and nothing else.
+	 */
 	refspec_init_fetch(&provenance_rs, the_hash_algo);
-	if (!option_mirror)
+	if (!option_mirror && !option_rev)
 		provenance_fetch_refspecs(the_repository, remote, NULL,
 					  &provenance_rs);
 

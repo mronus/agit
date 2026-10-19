@@ -121,6 +121,12 @@ test_expect_success 'clone --mirror has the refs directly' '
 	test_cmp expect actual
 '
 
+test_expect_success 'clone --revision makes no provenance refs' '
+	git clone --revision=main remote.git revision &&
+	provenance_refs revision >actual &&
+	test_must_be_empty actual
+'
+
 test_expect_success 'fetch brings new records and fast-forwards the local refs' '
 	commit_in src two s2 &&
 	git -C src push 2>err &&
@@ -447,6 +453,34 @@ test_expect_success 'shallow clone gets and merges records' '
 	test_cmp expect actual &&
 	git -C a provenance show main >expect &&
 	git -C shallow provenance show origin/main >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'lazy fetch of a partial clone leaves the refs alone' '
+	test_config -C remote.git uploadpack.allowfilter 1 &&
+	test_config -C remote.git uploadpack.allowanysha1inwant 1 &&
+	git clone --no-checkout --filter=blob:none \
+		"file://$(pwd)/remote.git" partial &&
+	git -C partial for-each-ref refs/provenance/ >expect &&
+	git -C a pull -q &&
+	commit_in a after-partial &&
+	git -C a push &&
+	git -C partial rev-list --objects --missing=print main >objects &&
+	blob=$(sed -n -e "s/^?//p" objects | head -n 1) &&
+	test -n "$blob" &&
+	git -C partial cat-file -p $blob &&
+	git -C partial for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'fetch of an object id leaves the refs alone' '
+	git -C partial for-each-ref refs/provenance/ >expect &&
+	git -C partial fetch origin $(git -C a rev-parse main) &&
+	git -C partial for-each-ref refs/provenance/ >actual &&
+	test_cmp expect actual &&
+	git -C partial fetch origin &&
+	git -C partial rev-parse refs/provenance/remotes/origin/lines >actual &&
+	git -C remote.git rev-parse refs/provenance/lines >expect &&
 	test_cmp expect actual
 '
 

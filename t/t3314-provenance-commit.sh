@@ -168,6 +168,13 @@ test_expect_success 'advice.provenanceSession silences the advice' '
 	test_grep ! "hint:" err
 '
 
+test_expect_success '--quiet silences the advice' '
+	echo quieter >quiet &&
+	git commit -q -a -m quieter 2>err &&
+	test_must_be_empty err &&
+	git provenance verify HEAD
+'
+
 test_expect_success 'an empty commit gets a record without files' '
 	git commit --allow-empty -m empty 2>err &&
 	test_grep ! "hint:" err &&

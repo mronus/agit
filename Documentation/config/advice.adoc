@@ -77,9 +77,10 @@ all advice messages.
 	provenanceSession::
 		Shown when linkgit:git-commit[1] records provenance for a
 		commit that no AI agent session is linked to, to say that
-		the session can be named with `--session`.  Not shown for
-		a commit whose line record has no range, such as an empty
-		commit or a merge that resolved nothing.
+		the session can be named with `--session`.  Not shown with
+		`--quiet`, nor for a commit whose line record has no
+		range, such as an empty commit or a merge that resolved
+		nothing.
 	pushAlreadyExists::
 		Shown when linkgit:git-push[1] rejects an update that
 		does not qualify for fast-forwarding (e.g., a tag.)

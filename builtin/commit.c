@@ -2128,7 +2128,7 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
-	if (record_provenance && !prov_reasoning.sessions_nr &&
+	if (!quiet && record_provenance && !prov_reasoning.sessions_nr &&
 	    records_lines(&prov_lines))
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"

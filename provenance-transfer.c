@@ -92,10 +92,26 @@ static int refspec_maps(struct refspec *rs, const char *name)
 	return mapped;
 }
 
+/*
+ * Return whether `rs` only asks for objects by their names, without
+ * storing them in local refs, as the lazy fetch of a partial clone
+ * does.
+ */
+static int fetches_objects_only(const struct refspec *rs)
+{
+	if (!rs || !rs->nr)
+		return 0;
+	for (int i = 0; i < rs->nr; i++)
+		if (!rs->items[i].exact_sha1 ||
+		    (rs->items[i].dst && *rs->items[i].dst))
+			return 0;
+	return 1;
+}
+
 void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
 			       struct refspec *cmdline, struct refspec *out)
 {
-	if (!remote_transfers(r, remote))
+	if (!remote_transfers(r, remote) || fetches_objects_only(cmdline))
 		return;
 
 	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
