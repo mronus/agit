@@ -1269,6 +1269,7 @@ LIB_OBJS += provenance-attribute.o
 LIB_OBJS += provenance-commit.o
 LIB_OBJS += provenance-journal.o
 LIB_OBJS += provenance-patch.o
+LIB_OBJS += provenance-purge.o
 LIB_OBJS += provenance-transfer.o
 LIB_OBJS += provenance-view.o
 LIB_OBJS += prune-packed.o

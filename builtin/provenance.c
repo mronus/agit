@@ -4,15 +4,19 @@
 
 #include "git-compat-util.h"
 
+#include "advice.h"
 #include "builtin.h"
 #include "commit.h"
 #include "config.h"
 #include "gettext.h"
 #include "hex.h"
 #include "object-name.h"
+#include "oid-array.h"
 #include "parse-options.h"
 #include "provenance.h"
 #include "provenance-adopt.h"
+#include "provenance-purge.h"
+#include "quote.h"
 #include "repository.h"
 #include "revision.h"
 #include "strbuf.h"
@@ -27,6 +31,12 @@
 
 #define PROVENANCE_ADOPT_USAGE \
 	N_("git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...")
+
+#define PROVENANCE_PURGE_USAGE \
+	N_("git provenance purge [--dry-run] <revision-range>..."), \
+	N_("git provenance purge [--dry-run] --session <id>... [<revision-range>...]"), \
+	N_("git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>\n" \
+	   "                     [<revision-range>...]")
 
 static struct commit *lookup_commit_arg(struct repository *repo,
 					const char *arg)
@@ -213,6 +223,125 @@ static int cmd_provenance_adopt(int argc, const char **argv, const char *prefix,
 	return ret;
 }
 
+static int cmd_provenance_purge(int argc, const char **argv, const char *prefix,
+				struct repository *repo)
+{
+	const char * const purge_usage[] = {
+		PROVENANCE_PURGE_USAGE,
+		NULL,
+	};
+	enum { PATTERN_BASIC, PATTERN_EXTENDED, PATTERN_FIXED };
+	struct string_list sessions = STRING_LIST_INIT_NODUP;
+	const char *redact = NULL;
+	int dry_run = 0, pattern_type = PATTERN_BASIC, icase = 0;
+	struct option options[] = {
+		OPT__DRY_RUN(&dry_run, N_("show what would be purged")),
+		OPT_STRING_LIST(0, "session", &sessions, N_("id"),
+				N_("drop the session <id> from the records")),
+		OPT_STRING(0, "redact", &redact, N_("pattern"),
+			   N_("replace the matches of <pattern> in the summaries")),
+		OPT_SET_INT('E', "extended-regexp", &pattern_type,
+			    N_("<pattern> is an extended regular expression"),
+			    PATTERN_EXTENDED),
+		OPT_SET_INT('F', "fixed-strings", &pattern_type,
+			    N_("<pattern> is a fixed string"), PATTERN_FIXED),
+		OPT_BOOL('i', "regexp-ignore-case", &icase,
+			 N_("match <pattern> ignoring case")),
+		OPT_END(),
+	};
+	static const char *words[] = {
+		[PROVENANCE_PURGE_REMOVED] = "removed",
+		[PROVENANCE_PURGE_REDACTED] = "redacted",
+		[PROVENANCE_PURGE_SESSION_DROPPED] = "session dropped",
+	};
+	struct provenance_purge_opts opts = { 0 };
+	struct provenance_purged *purged = NULL;
+	struct oid_array commits = OID_ARRAY_INIT;
+	size_t purged_nr = 0;
+	regex_t pattern;
+	int ranges, ret = 0;
+
+	argc = parse_options(argc, argv, prefix, options, purge_usage,
+			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN_OPT);
+	ranges = argc > 1;
+	die_for_incompatible_opt2(sessions.nr > 0, "--session",
+				  !!redact, "--redact");
+	if (!redact && pattern_type != PATTERN_BASIC)
+		die(_("the option '%s' requires '%s'"),
+		    pattern_type == PATTERN_FIXED ? "-F" : "-E", "--redact");
+	if (!redact && icase)
+		die(_("the option '%s' requires '%s'"), "-i", "--redact");
+	if (!ranges && !sessions.nr && !redact)
+		usage_with_options(purge_usage, options);
+
+	opts.dry_run = dry_run;
+	if (sessions.nr)
+		opts.sessions = &sessions;
+	if (redact) {
+		struct strbuf quoted = STRBUF_INIT;
+		int flags = REG_NEWLINE;
+
+		if (pattern_type == PATTERN_FIXED) {
+			basic_regex_quote_buf(&quoted, redact);
+			redact = quoted.buf;
+		} else if (pattern_type == PATTERN_EXTENDED) {
+			flags |= REG_EXTENDED;
+		}
+		if (icase)
+			flags |= REG_ICASE;
+		if (regcomp(&pattern, redact, flags))
+			die(_("invalid regular expression: %s"), redact);
+		strbuf_release(&quoted);
+		opts.pattern = &pattern;
+	}
+
+	if (ranges) {
+		struct rev_info revs;
+		struct commit *commit;
+
+		/* a single commit is that commit, as for "adopt" */
+		repo_init_revisions(repo, &revs, prefix);
+		revs.no_walk = 1;
+		revs.topo_order = 1;
+		revs.reverse = 1;
+		argc = setup_revisions(argc, argv, &revs, NULL);
+		if (argc > 1)
+			die(_("unrecognized argument: %s"), argv[1]);
+		if (prepare_revision_walk(&revs))
+			die(_("revision walk setup failed"));
+		while ((commit = get_revision(&revs)))
+			oid_array_append(&commits, &commit->object.oid);
+		release_revisions(&revs);
+	}
+
+	if (provenance_purge(repo, &opts, ranges ? &commits : NULL,
+			     &purged, &purged_nr))
+		ret = 1;
+	for (size_t i = 0; i < purged_nr; i++) {
+		printf("%s %s", oid_to_hex(&purged[i].commit),
+		       words[purged[i].result]);
+		if (purged[i].result == PROVENANCE_PURGE_REDACTED)
+			printf(" %"PRIuMAX, (uintmax_t)purged[i].matches);
+		putchar('\n');
+	}
+	if (!ret && !purged_nr)
+		fprintf_ln(stderr, _("nothing to purge"));
+	else if (!ret && !dry_run)
+		advise_if_enabled(ADVICE_PROVENANCE_PURGE,
+				  _("To replace the reasoning records of a remote with these, use\n"
+				    "'git push --force <remote> refs/provenance/reasoning'. Then,\n"
+				    "to drop the purged records from this repository, use\n"
+				    "'git reflog expire --expire=now refs/provenance/reasoning'\n"
+				    "and 'git gc --prune=now'."));
+
+	if (opts.pattern)
+		regfree(&pattern);
+	string_list_clear(&sessions, 0);
+	oid_array_clear(&commits);
+	free(purged);
+	return ret;
+}
+
 int cmd_provenance(int argc,
 		   const char **argv,
 		   const char *prefix,
@@ -222,6 +351,7 @@ int cmd_provenance(int argc,
 		PROVENANCE_SHOW_USAGE,
 		PROVENANCE_VERIFY_USAGE,
 		PROVENANCE_ADOPT_USAGE,
+		PROVENANCE_PURGE_USAGE,
 		NULL,
 	};
 	parse_opt_subcommand_fn *fn = NULL;
@@ -229,6 +359,7 @@ int cmd_provenance(int argc,
 		OPT_SUBCOMMAND("show", &fn, cmd_provenance_show),
 		OPT_SUBCOMMAND("verify", &fn, cmd_provenance_verify),
 		OPT_SUBCOMMAND("adopt", &fn, cmd_provenance_adopt),
+		OPT_SUBCOMMAND("purge", &fn, cmd_provenance_purge),
 		OPT_END(),
 	};
 

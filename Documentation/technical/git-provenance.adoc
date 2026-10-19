@@ -778,9 +778,25 @@ into the local ref, through a ref transaction:
 3. A record that both sides changed differently keeps the local
    version, with a warning naming the commit. Records are not
    concatenated, as the `cat_sort_uniq` strategy of `notes-merge.c`
-   would do, because the result would not parse. If the two sides
-   share no history, as in a shallow clone, the merge is a union with
-   the same rule.
+   would do, because the result would not parse.
+
+4. If the two sides share no history, one of them may have rewritten
+   it, as `provenance purge` does. The value T that the tracking ref
+   had before the fetch is the last state both sides agreed on (for
+   the retry of a push, the value before the retry's fetch). If T is
+   in the history of the fetched commit only, the local history was
+   rewritten: the tree is a three-way merge against T, and the commit
+   has the local commit as its only parent, so the purged records do
+   not come back and those the remote added since T do. If T is in
+   the history of the local ref only, the remote history was
+   rewritten: the same merge has the fetched commit as its only
+   parent, or the local ref takes the fetched commit if it is still
+   at T, so the local records added since T are kept and the result
+   fast-forwards the remote without bringing the old history back.
+   Otherwise, as in a shallow clone or with no tracking ref yet, the
+   merge is a union with the rule of 3. The reflog message names the
+   case: `fetch: merge provenance from <name> (rewritten locally)`,
+   or `(rewritten on <name>)`.
 
 The merge is written on top of `notes.c` in `provenance-transfer.c`
 rather than through `notes_merge()`, whose `ours` strategy resolves
@@ -799,7 +815,11 @@ with `--force`. If the remote rejects a provenance ref because it
 moved, `push` runs `git fetch` for the rejected refs, which merges
 them as above, and pushes the provenance refs once more; if that is
 rejected too because the remote moved again, the push fails with a
-hint to run `git fetch <name>`.
+hint to run `git fetch <name>`. After a local rewrite the second push
+is rejected as well, as the merge keeps the rewrite; when the tracking
+ref is not in the history of the local ref, the hint says that the
+history was rewritten locally and names `git push --force <name>
+<ref>` instead. Both hints are gated by `advice.pushUpdateRejected`.
 
 A provenance ref that the push updated on the remote, whether added
 on its own or named in the refspecs, sets its tracking ref
@@ -845,6 +865,10 @@ Maintenance
   reachable can optionally be pruned, as `git notes prune` does.
 
 - `provenance verify` is the `fsck` of provenance.
+
+- `provenance purge` rewrites `refs/provenance/reasoning` to remove
+  records, sessions or matches of a pattern (see "Privacy"); after it,
+  `gc` drops the purged blobs once nothing else reaches them.
 
 - `fast-export` and `fast-import` carry the provenance refs as the
   notes refs they are, as ordinary commits: `fast-export --all`, or
@@ -947,21 +971,40 @@ the extension can prove that a human typed a line marked `HUMAN`.
 
 Privacy
 -------
-Like Git itself, the extension has no built-in secret scanning or
-redaction. Scanning and push protection are hosting-service and
-pre-commit features, and they apply unchanged because reasoning is
-pushed as ordinary blobs under an ordinary ref.
+Like Git itself, the extension has no built-in secret scanning, and
+redacts nothing on its own. Scanning and push protection are
+hosting-service and pre-commit features, and they apply unchanged
+because reasoning is pushed as ordinary blobs under an ordinary ref.
 
 What the extension guarantees is that reasoning is separable, so
-those tools have something to act on without touching code history:
+those tools, and the user, have something to act on without touching
+code history:
 
 - Reasoning lives under `refs/provenance/reasoning`, not in the
   commit. Rewriting or deleting that ref's history changes no commit
   id.
 
-- `git provenance purge <commit|session|pattern>` rewrites only that
-  ref. Old blobs then go away by the usual route: force-push the one
-  ref and let the host's `gc` drop them.
+- `git provenance purge` rewrites only that ref. Given commits, it
+  removes their records; with `--session <id>`, it drops the session
+  and the summary it may have written from every record that names
+  it, and removes a record left without a session; with `--redact
+  <pattern>` (`-E`, `-F`, `-i` as for `log --grep`), it replaces each
+  match in the summaries with `***REMOVED***`, the marker of `git
+  filter-repo --replace-text`, and never touches the header. The
+  records that are left are written as one notes commit without a
+  parent, so the purged blobs, and the history that held them, are
+  no longer reachable from the ref. Line records hold no free text
+  and are not rewritten.
+
+- Old blobs then go away by the usual route: `git push --force
+  <remote> refs/provenance/reasoning` replaces the one ref, the
+  host's `gc` drops them there, and `reflog expire` and `gc
+  --prune=now` drop the local copies. The merge on fetch tells a
+  rewrite from a divergence through the tracking ref (see
+  "Transfer"), so the purge survives later fetches and pushes on
+  every clone that fetches it; a clone that force-pushes the ref
+  without fetching first brings the records back, as with any
+  rewritten history.
 
 - `refs/provenance/reasoning` can be pushed to a different remote than
   the code, or not pushed at all.
@@ -1010,8 +1053,9 @@ The following were decided during design and are reflected above:
    written: commits with no record, and the lines a rewrite takes from
    them.
 
-3. Integrity and privacy follow Git's norm: no commitments, scanning
-   or redaction inside the extension.
+3. Integrity and privacy follow Git's norm: no commitments or
+   scanning inside the extension, and no redaction but the one the
+   user asks for with `provenance purge`.
 
 4. Reasoning is fetched by default.
 
@@ -1058,7 +1102,7 @@ Each step is implemented and reviewed on its own:
    (c) a CI job running the upstream suite with provenance enabled,
    and the fixes it needs (done);
    (d) `format-patch`/`am` and `fast-export`/`fast-import` (done);
-   (e) `purge`;
+   (e) `purge`, and the merge on fetch after a rewrite (done);
    (f) the query cache and repository-wide queries;
    (g) a CI bot.
 

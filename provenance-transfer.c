@@ -188,25 +188,33 @@ static int merge_removed(const struct object_id *commit,
 
 /*
  * Write a merge commit of the notes commits `ours` (the local ref
- * `ref`) and `theirs`, whose tree is the union of both, into `result`.
+ * `ref`) and `theirs` into `result`.  Its tree is a three-way merge
+ * against `base`, or against their merge base if `base` is NULL.  Its
+ * parent is `parent` if it is not NULL, and both sides otherwise.
  */
 static int merge_notes(struct repository *r, const char *ref,
 		       const char *remote_name, struct commit *ours,
-		       struct commit *theirs, struct object_id *result)
+		       struct commit *theirs, struct commit *base,
+		       struct commit *parent, struct object_id *result)
 {
 	struct merge_state s = { .ref = ref };
 	struct commit_list *bases = NULL, *parents = NULL;
 	struct strbuf msg = STRBUF_INIT;
 
-	if (repo_get_merge_bases(r, ours, theirs, &bases) < 0)
-		return error(_("unable to find the merge base of '%s'"), ref);
+	if (!base) {
+		if (repo_get_merge_bases(r, ours, theirs, &bases) < 0)
+			return error(_("unable to find the merge base of '%s'"),
+				     ref);
+		if (bases)
+			base = bases->item;
+	}
 
 	/*
 	 * The notes trees are read from commits, not refs: their
 	 * names only identify them, as nothing writes them to a ref.
 	 */
-	if (bases) {
-		init_notes(&s.base, oid_to_hex(&bases->item->object.oid),
+	if (base) {
+		init_notes(&s.base, oid_to_hex(&base->object.oid),
 			   combine_notes_overwrite, 0);
 	} else {
 		warning(_("the fetched '%s' shares no history with the local "
@@ -222,8 +230,12 @@ static int merge_notes(struct repository *r, const char *ref,
 	for_each_note(&s.theirs, 0, merge_theirs, &s);
 	for_each_note(&s.base, 0, merge_removed, &s);
 
-	commit_list_insert(theirs, &parents);
-	commit_list_insert(ours, &parents);
+	if (parent) {
+		commit_list_insert(parent, &parents);
+	} else {
+		commit_list_insert(theirs, &parents);
+		commit_list_insert(ours, &parents);
+	}
 	strbuf_addf(&msg, "Merge provenance from %s\n", remote_name);
 	create_notes_commit(r, &s.ours, parents, msg.buf, msg.len, result);
 
@@ -249,9 +261,53 @@ static struct commit *notes_commit(struct repository *r,
 	return commit;
 }
 
-/* Merge the tracking ref `tracking` into the local ref `ref`. */
+enum rewrite_side {
+	REWRITE_NONE,
+	REWRITE_LOCAL,
+	REWRITE_REMOTE,
+};
+
+/*
+ * Return which side rewrote the history of the provenance ref whose
+ * local commit is `ours` and whose fetched commit is `theirs`, given
+ * `last`, the commit that the tracking ref pointed to before the
+ * fetch: the last state that both sides agreed on.  A side rewrote
+ * it if `last` is in the history of the other side only, and the two
+ * sides share no history.  If one did, set `*base` to `last`.
+ */
+static enum rewrite_side rewrite_of(struct repository *r,
+				    struct commit *ours, struct commit *theirs,
+				    const struct object_id *last,
+				    struct commit **base)
+{
+	struct commit_list *bases = NULL;
+	struct commit *t;
+	int in_ours, in_theirs, shared;
+
+	if (is_null_oid(last))
+		return REWRITE_NONE;
+	t = lookup_commit_reference_gently(r, last, 1);
+	if (!t || repo_parse_commit(r, t))
+		return REWRITE_NONE;
+	in_ours = repo_in_merge_bases(r, t, ours);
+	in_theirs = repo_in_merge_bases(r, t, theirs);
+	if (in_ours < 0 || in_theirs < 0 || in_ours == in_theirs)
+		return REWRITE_NONE;
+	shared = repo_get_merge_bases(r, ours, theirs, &bases) < 0 || bases;
+	commit_list_free(bases);
+	if (shared)
+		return REWRITE_NONE;
+	*base = t;
+	return in_theirs ? REWRITE_LOCAL : REWRITE_REMOTE;
+}
+
+/*
+ * Merge the tracking ref `tracking`, which pointed to `last` before
+ * the fetch, into the local ref `ref`.
+ */
 static int merge_one(struct repository *r, const char *remote_name,
-		     const char *ref, const char *tracking, int verbose)
+		     const char *ref, const char *tracking,
+		     const struct object_id *last, int verbose)
 {
 	struct ref_store *refs = get_main_ref_store(r);
 	struct object_id theirs_oid, ours_oid, result;
@@ -259,6 +315,7 @@ static int merge_one(struct repository *r, const char *remote_name,
 	struct ref_transaction *transaction;
 	struct strbuf err = STRBUF_INIT, msg = STRBUF_INIT;
 	const char *what;
+	enum rewrite_side rewrite = REWRITE_NONE;
 	int ret;
 
 	if (refs_read_ref(refs, tracking, &theirs_oid))
@@ -287,14 +344,33 @@ static int merge_one(struct repository *r, const char *remote_name,
 			oidcpy(&result, &theirs_oid);
 			what = _("fast-forwarded '%s' to '%s'\n");
 		} else {
-			if (merge_notes(r, ref, remote_name, ours, theirs,
-					&result))
-				return -1;
-			what = _("merged '%s' with '%s'\n");
+			struct commit *base = NULL;
+
+			rewrite = rewrite_of(r, ours, theirs, last, &base);
+			if (rewrite == REWRITE_REMOTE && base == ours) {
+				/* nothing was added locally since */
+				oidcpy(&result, &theirs_oid);
+				what = _("reset '%s' to the rewritten '%s'\n");
+			} else {
+				/* the side that rewrote it is the parent */
+				struct commit *parent =
+					rewrite == REWRITE_LOCAL ? ours :
+					rewrite == REWRITE_REMOTE ? theirs :
+					NULL;
+
+				if (merge_notes(r, ref, remote_name, ours,
+						theirs, base, parent, &result))
+					return -1;
+				what = _("merged '%s' with '%s'\n");
+			}
 		}
 	}
 
 	strbuf_addf(&msg, "fetch: merge provenance from %s", remote_name);
+	if (rewrite == REWRITE_LOCAL)
+		strbuf_addstr(&msg, " (rewritten locally)");
+	else if (rewrite == REWRITE_REMOTE)
+		strbuf_addf(&msg, " (rewritten on %s)", remote_name);
 	transaction = ref_store_transaction_begin(refs, 0, &err);
 	if (!transaction ||
 	    ref_transaction_update(transaction, ref, &result, &ours_oid,
@@ -313,14 +389,19 @@ static int merge_one(struct repository *r, const char *remote_name,
 	return ret;
 }
 
-/* Return whether the fetch described by `ref_map` updated `refname`. */
-static int fetch_updated(const struct ref *ref_map, const char *refname)
+/*
+ * Return the ref of the fetch described by `ref_map` that updated
+ * `refname`, or NULL if it did not update it.  Its peer ref holds the
+ * value `refname` had before the fetch.
+ */
+static const struct ref *fetch_update(const struct ref *ref_map,
+				      const char *refname)
 {
 	for (const struct ref *rm = ref_map; rm; rm = rm->next)
 		if (rm->peer_ref && !strcmp(rm->peer_ref->name, refname) &&
 		    !oideq(&rm->old_oid, &rm->peer_ref->old_oid))
-			return 1;
-	return 0;
+			return rm;
+	return NULL;
 }
 
 int provenance_merge_fetched(struct repository *r, const char *remote_name,
@@ -333,11 +414,13 @@ int provenance_merge_fetched(struct repository *r, const char *remote_name,
 
 	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
 		struct strbuf tracking = STRBUF_INIT;
+		const struct ref *rm;
 
 		tracking_ref_of(&tracking, remote_name, kinds[i]);
-		if (fetch_updated(ref_map, tracking.buf) &&
-		    merge_one(r, remote_name, local_ref_of(kinds[i]),
-			      tracking.buf, verbose))
+		rm = fetch_update(ref_map, tracking.buf);
+		if (rm && merge_one(r, remote_name, local_ref_of(kinds[i]),
+				    tracking.buf, &rm->peer_ref->old_oid,
+				    verbose))
 			ret = -1;
 		strbuf_release(&tracking);
 	}
@@ -543,6 +626,35 @@ void provenance_update_tracking(struct repository *r, struct remote *remote,
 					UPDATE_REFS_MSG_ON_ERR);
 		strbuf_release(&tracking);
 	}
+}
+
+const char *provenance_rewritten_locally(struct repository *r,
+					 const char *remote_name,
+					 const struct ref *refs)
+{
+	struct ref_store *store = get_main_ref_store(r);
+
+	for (const struct ref *ref = refs; ref; ref = ref->next) {
+		struct strbuf tracking = STRBUF_INIT;
+		struct object_id ours_oid, theirs_oid;
+		struct commit *ours, *theirs;
+		const char *kind;
+		int rewritten = 0;
+
+		if (!is_provenance_ref(ref->name) || !remote_moved(ref) ||
+		    !skip_prefix(ref->name, "refs/provenance/", &kind))
+			continue;
+		tracking_ref_of(&tracking, remote_name, kind);
+		if (!refs_read_ref(store, ref->name, &ours_oid) &&
+		    !refs_read_ref(store, tracking.buf, &theirs_oid) &&
+		    (ours = lookup_commit_reference_gently(r, &ours_oid, 1)) &&
+		    (theirs = lookup_commit_reference_gently(r, &theirs_oid, 1)))
+			rewritten = !repo_in_merge_bases(r, theirs, ours);
+		strbuf_release(&tracking);
+		if (rewritten)
+			return ref->name;
+	}
+	return NULL;
 }
 
 int provenance_fetch_rejected(struct repository *r, const char *remote_name,

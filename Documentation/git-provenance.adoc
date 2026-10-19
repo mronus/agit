@@ -3,7 +3,7 @@ git-provenance(1)
 
 NAME
 ----
-git-provenance - Show, verify and adopt AI provenance records of commits
+git-provenance - Show, verify, adopt and purge AI provenance records of commits
 
 
 SYNOPSIS
@@ -12,6 +12,10 @@ SYNOPSIS
 git provenance show [--reasoning] <commit>
 git provenance verify [<commit>...]
 git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...
+git provenance purge [--dry-run] <revision-range>...
+git provenance purge [--dry-run] --session <id>... [<revision-range>...]
+git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
+		     [<revision-range>...]
 
 DESCRIPTION
 -----------
@@ -30,9 +34,10 @@ linkgit:git-revert[1] and linkgit:git-rebase[1] carry the records of
 the commits they rewrite over to the commits they make (see their
 PROVENANCE sections).
 
-This command reads and checks records, and gives records to commits
-made without them from the records of the commits they were made from
-(`adopt`).  See linkgit:git-notes[1] for a way to attach a record by
+This command reads and checks records, gives records to commits made
+without them from the records of the commits they were made from
+(`adopt`), and removes what reasoning records must not hold
+(`purge`).  See linkgit:git-notes[1] for a way to attach a record by
 hand.
 
 COMMANDS
@@ -83,6 +88,54 @@ marked `capture adopted`.  Nothing is written for a commit that no
 source accounts for, so that it can be adopted once its sources have
 been fetched.
 
+`purge [--dry-run] <revision-range>...`::
+`purge [--dry-run] --session <id>... [<revision-range>...]`::
+`purge [--dry-run] [-E | -F] [-i] --redact <pattern> [<revision-range>...]`::
+	Remove from the reasoning records what they must not hold, such
+	as a secret that an AI session wrote into a summary.  Only
+	`refs/provenance/reasoning` is rewritten.  Line records are left
+	alone: they hold marks, session ids, and model and tool names,
+	but no free text.  Commits are named as for `adopt`.
++
+--
+_<revision-range>_ alone;;
+	Remove the reasoning records of the commits.
+`--session <id>`;;
+	Drop the `session` line of _<id>_ from each reasoning record that
+	has one, or from those of the given commits.  The summary of such
+	a record is dropped as well, as it cannot be told which session
+	wrote what, and a record left without a `session` line is removed,
+	as it would state that no AI was involved.  Can be given more
+	than once.
+`--redact <pattern>`;;
+	Replace each match of _<pattern>_ in the summary of each
+	reasoning record, or of those of the given commits, with
+	`***REMOVED***`.  The `version`, `commit` and `session` lines are
+	never changed.
+--
++
+A record that none of these changes is kept as it is, as is a record
+that cannot be parsed, with a warning.  One line is printed per record
+that is changed: `<object-id> removed`, `<object-id> redacted <n>`
+with the number of matches replaced, or `<object-id> session
+dropped`, where _<object-id>_ names the commit of the record.
++
+The records that are left are written as one new commit of
+`refs/provenance/reasoning` without a parent, so that neither the
+purged records nor the history of the ref that held them can be
+reached from it any more; nothing is written if no record is changed.
+The old records still exist until they are dropped: replace the ref
+of the remote with `git push --force <remote>
+refs/provenance/reasoning`, which also updates its tracking ref (see
+linkgit:git-push[1]), and then run `git reflog expire --expire=now
+refs/provenance/reasoning` and `git gc --prune=now` in this
+repository.  Other clones take the rewrite with their next fetch,
+which keeps the records they added since (see linkgit:git-fetch[1]).
+A clone that pushes its own `refs/provenance/reasoning` with `--force`
+without fetching first brings the purged records back, as it would
+for any rewritten history; so does a copy made by other means, such
+as a mail or a backup.
+
 OPTIONS
 -------
 
@@ -100,6 +153,34 @@ OPTIONS
 	was adopted.  Records that were observed or declared are never
 	replaced.
 
+`-n`::
+`--dry-run`::
+	With `purge`, print what would be purged, without writing
+	anything.
+
+`--session <id>`::
+	With `purge`, drop the session _<id>_ from the reasoning
+	records.
+
+`--redact <pattern>`::
+	With `purge`, replace the matches of _<pattern>_ in the summaries
+	of the reasoning records.  _<pattern>_ is a basic regular
+	expression, as `git log --grep` takes it, and matches within a
+	line.
+
+`-E`::
+`--extended-regexp`::
+	With `--redact`, _<pattern>_ is an extended regular expression.
+
+`-F`::
+`--fixed-strings`::
+	With `--redact`, _<pattern>_ is a fixed string, such as a leaked
+	key, whose characters have no special meaning.
+
+`-i`::
+`--regexp-ignore-case`::
+	With `--redact`, match _<pattern>_ ignoring case.
+
 EXIT STATUS
 -----------
 
@@ -108,8 +189,9 @@ not.  `verify` exits with status 0 if every record that exists
 verifies, and 1 otherwise; a commit without a record is not a
 failure.  `adopt` exits with status 0 unless an error occurred, such
 as a record that could not be written; a commit for which no source
-is found is not a failure.  All three exit with status 128 if an
-argument is not a commit.
+is found is not a failure.  `purge` exits with status 0 unless an
+error occurred, also when there is nothing to purge.  All four exit
+with status 128 if an argument is not a commit.
 
 SEE ALSO
 --------

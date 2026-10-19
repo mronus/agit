@@ -74,6 +74,11 @@ all advice messages.
 		Shown when various commands stop because of conflicts.
 	nestedTag::
 		Shown when a user attempts to recursively tag a tag object.
+	provenancePurge::
+		Shown when linkgit:git-provenance[1] `purge` has
+		rewritten `refs/provenance/reasoning`, to say how to
+		replace the ref of a remote and drop the purged records
+		from the repository.
 	provenanceSession::
 		Shown when linkgit:git-commit[1] records provenance for a
 		commit that no AI agent session is linked to, to say that
