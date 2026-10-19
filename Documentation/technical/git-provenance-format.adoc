@@ -308,6 +308,57 @@ Whether the ranges cover exactly the lines changed by the commit, and
 the content of reasoning records, are not verified yet.
 
 
+Line record in a patch mail
+---------------------------
+
+`git format-patch` carries the line record of a commit in the mail
+that holds its patch, as a block of the commentary between the `---`
+line that ends the commit message and the patch, where `--notes` puts
+notes:
+
+------------
+---
+Provenance:
+    version 1
+    commit <object id of the code commit>
+    capture observed git/<version>
+    ...
+
+ <diffstat>
+------------
+
+The block is made of:
+
+1. a line that is exactly `Provenance:`;
+
+2. the lines of the record, as this document specifies them, each
+   prefixed with four spaces;
+
+3. an empty line, or any other line that does not start with four
+   spaces, which ends the block.
+
+A reader looks for the block in the lines after the commit message
+and before the first line that starts with `diff `, `--- `, `+++ ` or
+`Index: `, takes the first line there that is exactly `Provenance:`,
+removes the four spaces from each line of the block and parses the
+result as a line record.  A block that does not parse is ignored.
+
+No line of the block starts with one of these prefixes, or with
+`@@ -`, so tools that look for a patch in a mail, as `git am` and `git
+apply` do, pass over the block whether they know it or not.
+
+The record is the one attached to the commit in the repository the
+mail was made in, without the `file` blocks of the paths that the
+patch of the mail does not show; a record left without `file` blocks
+is not sent.  The `commit` line names that commit, and the ranges
+describe its changes against its first parent.  A reader that applies
+the patch makes another commit, possibly on another parent, so it
+cannot take the commit id or the line numbers as they are; the
+anchors still identify the lines.  Object ids are in the hash
+algorithm of the repository the mail was made in.  Reasoning records
+are not carried by mail.
+
+
 Capture journal
 ---------------
 

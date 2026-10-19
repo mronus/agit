@@ -434,9 +434,10 @@ Viewing
   `diff-tree -p` and every other command that shows a patch accept
   it. It inserts the mark of each line before its `+`/`-` marker, and
   a space before context lines. Combined diffs and `--word-diff`
-  output get no column, and `format-patch` rejects the option: its
-  output is meant to be applied, and a patch with the column cannot
-  be.
+  output get no column. The output of `format-patch` is meant to be
+  applied, and a patch with the column cannot be, so its
+  `--provenance` adds the line record to the mail instead (see
+  "Maintenance").
 
 - When a patch shows a commit against its first parent (the parent
   named in the commit object, whatever the history walk did to it),
@@ -826,8 +827,17 @@ Maintenance
 - `fast-export` and `fast-import` already carry notes, so migrations
   and `filter-repo` can carry records.
 
-- `format-patch` can emit the line record after the `---` separator,
-  where stock `git am` ignores it.
+- `format-patch` adds the line record of each commit to its mail, in a
+  `Provenance:` block after the `---` separator, where the notes of
+  `--notes` go and where stock `git am` and `git apply` ignore it (see
+  the format document). It is on by default, with
+  `format.provenance`, which defaults to `provenance.enabled`, and
+  `--[no-]provenance`. The record keeps the `file` blocks of the
+  paths that the patch shows, and there is no block when none is
+  left, as for an empty commit, nor in the cover letter. The reasoning
+  record is not mailed: it may be large or private, and a mail is a
+  copy that cannot be purged. `log` and `show` keep their
+  `--provenance` column and never print the block.
 
 Migration and Interoperability
 ------------------------------

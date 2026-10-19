@@ -377,9 +377,12 @@ test_expect_success 'the boundary of a shallow clone shows ? quietly' '
 	test_grep ! "^[AMH][-+]" actual.body
 '
 
-test_expect_success 'format-patch rejects --provenance' '
-	test_must_fail git format-patch --provenance -1 second 2>err &&
-	test_grep "provenance does not make sense" err
+test_expect_success 'format-patch --provenance adds no column to the patch' '
+	git format-patch --provenance --stdout -1 second >actual &&
+	git format-patch --no-provenance --stdout -1 second >plain &&
+	patch_body actual >actual.body &&
+	patch_body plain >expect &&
+	test_cmp expect actual.body
 '
 
 # Print the marks that "git show --provenance" prints for HEAD.

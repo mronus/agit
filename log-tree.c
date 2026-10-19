@@ -34,6 +34,7 @@
 #include "wildmatch.h"
 #include "write-or-die.h"
 #include "pager.h"
+#include "provenance-patch.h"
 #include "provenance-view.h"
 
 static struct decoration name_decoration = { "object names" };
@@ -897,6 +898,18 @@ void show_log(struct rev_info *opt)
 		if (cmit_fmt_is_mail(ctx.fmt))
 			next_commentary_block(opt, &msgbuf);
 		strbuf_addstr(&msgbuf, ctx.notes_message);
+	}
+
+	if (opt->show_provenance_block && cmit_fmt_is_mail(ctx.fmt)) {
+		struct strbuf block = STRBUF_INIT;
+
+		/* the patch, which comes next, is in the diff queue */
+		if (provenance_patch_format(opt->repo, &commit->object.oid,
+					    &diff_queued_diff, &block)) {
+			next_commentary_block(opt, &msgbuf);
+			strbuf_addbuf(&msgbuf, &block);
+		}
+		strbuf_release(&block);
 	}
 
 	if (opt->show_log_size) {
