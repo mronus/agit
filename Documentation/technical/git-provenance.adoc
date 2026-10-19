@@ -434,9 +434,10 @@ Viewing
   `diff-tree -p` and every other command that shows a patch accept
   it. It inserts the mark of each line before its `+`/`-` marker, and
   a space before context lines. Combined diffs and `--word-diff`
-  output get no column, and `format-patch` rejects the option: its
-  output is meant to be applied, and a patch with the column cannot
-  be.
+  output get no column. The output of `format-patch` is meant to be
+  applied, and a patch with the column cannot be, so its
+  `--provenance` adds the line record to the mail instead (see
+  "Maintenance").
 
 - When a patch shows a commit against its first parent (the parent
   named in the commit object, whatever the history walk did to it),
@@ -634,10 +635,32 @@ commit` with `MERGE_HEAD`, so they record what they resolve, as any
 merge does (see "Commit"); they do not carry the records of the merges
 they replace, whose resolutions may no longer apply.
 
-Not covered yet: `git replay`, `git history`, and `git am` of mailbox
-patches, which have no source commit. Rewrites by tools that do not know the
-extension leave commits without records, which `git provenance adopt`
-repairs (see "Re-anchoring").
+`git am` of a mailbox patch has no source commit, but the mail may
+carry the line record of the commit it was made from (see
+"Maintenance"). The commit that `am` makes is then its own source,
+with that record located in it: each range is looked for among the
+runs of lines that the commit adds to its path (`+`) or deletes from
+it (`-`), as the window of as many lines whose bytes hash to the
+anchor of the range, the one closest to the recorded line numbers
+where several match, and a range found there gives the window its
+marks and actors. The lines it changes that no range found covers are
+`UNKNOWN` if the record had a range for the path that was not found,
+as a conflict resolution may have changed its lines, and otherwise go
+to the fallback owner, the human or the stamps of the journal. A mail
+without a block, as from stock Git, makes every line the commit
+changes `UNKNOWN`, as a pick of a commit without a record does. The
+`commit` line of the mailed record is only informational, `capture`
+follows the rules of rewrites, and no reasoning record comes with the
+mail. `am` keeps the record in `rebase-apply/provenance` until the
+commit is made, so that `am --continue` has it, writes the records
+in the ref transaction that moves `HEAD`, and empties the journal; as
+for picks, `provenance.require` does not refuse the commit and no
+advice is given. `am --rebasing`, for `rebase --apply`, keeps taking
+the records of `rebase-apply/original-commit`.
+
+Not covered yet: `git replay` and `git history`. Rewrites by tools
+that do not know the extension leave commits without records, which
+`git provenance adopt` repairs (see "Re-anchoring").
 
 Re-anchoring
 ~~~~~~~~~~~~
@@ -823,11 +846,33 @@ Maintenance
 
 - `provenance verify` is the `fsck` of provenance.
 
-- `fast-export` and `fast-import` already carry notes, so migrations
-  and `filter-repo` can carry records.
+- `fast-export` and `fast-import` carry the provenance refs as the
+  notes refs they are, as ordinary commits: `fast-export --all`, or
+  an export that names the refs, imported into a new repository
+  reproduces them byte for byte, and the records verify there.
+  `fast-export` adds nothing implicitly, so an export of a branch
+  alone carries no records. The records are keyed by commit id, so
+  they only describe the imported commits if the stream keeps the
+  ids: an import that changes them, as with `--reencode=yes` or an
+  edited stream (`filter-repo`), leaves the records attached to the
+  old ids, where no commit uses them; carrying them over needs a
+  stream extension (see "Future Work"). The notes
+  commits of the provenance refs carry an `encoding` header when
+  `i18n.commitEncoding` is set, as those of `git notes` do, so
+  `fast-export` needs `--reencode` for them as for the other commits.
 
-- `format-patch` can emit the line record after the `---` separator,
-  where stock `git am` ignores it.
+- `format-patch` adds the line record of each commit to its mail, in a
+  `Provenance:` block after the `---` separator, where the notes of
+  `--notes` go and where stock `git am` and `git apply` ignore it (see
+  the format document); `am` records it for the commit it makes (see
+  "History rewriting"). It is on by default, with
+  `format.provenance`, which defaults to `provenance.enabled`, and
+  `--[no-]provenance`. The record keeps the `file` blocks of the
+  paths that the patch shows, and there is no block when none is
+  left, as for an empty commit, nor in the cover letter. The reasoning
+  record is not mailed: it may be large or private, and a mail is a
+  copy that cannot be purged. `log` and `show` keep their
+  `--provenance` column and never print the block.
 
 Migration and Interoperability
 ------------------------------

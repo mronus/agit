@@ -152,6 +152,12 @@ For example,
 +
 will only show notes from `refs/notes/bar`.
 
+format.provenance::
+	Provides the default value for the `--provenance` option to
+	format-patch, which appends the line record of each commit to
+	its patch (see linkgit:git-format-patch[1]).  Defaults to the
+	value of `provenance.enabled`.
+
 format.mboxrd::
 	A boolean value which enables the robust "mboxrd" format when
 	`--stdout` is in use to escape "^>+From " lines.

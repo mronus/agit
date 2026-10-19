@@ -27,6 +27,7 @@ git format-patch [-k] [(-o|--output-directory) <dir> | --stdout]
 		   [--commit-list-format=<format-spec>]
 		   [--[no-]encode-email-headers]
 		   [--no-notes | --notes[=<ref>]]
+		   [--[no-]provenance]
 		   [--interdiff=<previous>]
 		   [--range-diff=<previous> [--creation-factor=<percent>]]
 		   [--filename-max-length=<n>]
@@ -405,6 +406,17 @@ configuration options in linkgit:git-notes[1] to use this workflow).
 The default is `--no-notes`, unless the `format.notes` configuration is
 set.
 
+`--provenance`::
+`--no-provenance`::
+	Append the line record of the commit, which says who wrote the
+	lines it changes, after the three-dash line, so that `git am`
+	can record it for the commit it makes (see <<PROVENANCE>>
+	below).
++
+The default is `--provenance` if provenance is enabled (see
+`provenance.enabled` in linkgit:git-config[1]), unless the
+`format.provenance` configuration is set.
+
 `--signature=<signature>`::
 `--no-signature`::
 	Add a signature to each message produced. Per RFC 3676 the signature
@@ -715,6 +727,47 @@ This should help you to submit patches inline using KMail.
    message, complete the addressing and subject fields, and press send.
 
 [[BASE_TREE_INFORMATION]]
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+A commit made with provenance enabled has a line record, which says
+which of the lines it changes were written by an AI agent, by a human,
+or by both (see linkgit:git-provenance[1]).  The record is kept next
+to the commit, under `refs/provenance/lines`, so a patch does not
+carry it by itself.  With `--provenance`, the patch of each commit that
+has a line record carries it in a `Provenance:` block after the
+three-dash line, before the diffstat, each line of the record indented
+by four spaces, and the block is followed by an empty line:
+
+------------
+---
+Provenance:
+    version 1
+    commit 1c5d3a8...
+    capture observed git/2.56.0.agit.1
+    actor s1 ai model=m1 tool=t1 session=s1 source=observed
+    file hello.c
+    + 3-5 AI s1 9d1e2f0...
+    - 3 AI s1 4b7a8c1...
+
+ hello.c | 4 +++-
+------------
+
+linkgit:git-am[1] records the block for the commit it makes from the
+patch (see the PROVENANCE section there).  Like notes, the block comes
+after the three-dash line, where the commit message has ended and the
+patch has not begun yet, so `git apply`, and `git am` of a Git that
+does not know the block, take the patch as they would without it.
+
+The record in the block keeps only the `file` blocks of the paths that
+the patch shows, so that a patch limited with a pathspec does not
+carry the rest.  A patch that shows none of the paths of the record,
+as that of an empty commit, gets no block, and neither do the cover
+letter and the patch of a commit without a line record.  The reasoning
+record of a commit, which says why it was made, is not carried by
+mail.
+
 BASE TREE INFORMATION
 ---------------------
 

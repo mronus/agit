@@ -46,6 +46,7 @@
 
 #include "commit-reach.h"
 #include "promisor-remote.h"
+#include "provenance.h"
 #include "range-diff.h"
 #include "tmp-objdir.h"
 #include "tree.h"
@@ -896,6 +897,7 @@ struct format_config {
 	enum cover_from_description cover_from_description_mode;
 	int show_notes;
 	struct display_notes_opt notes_opt;
+	int provenance;
 	int numbered_cmdline_opt;
 	int numbered;
 	int auto_number;
@@ -915,6 +917,7 @@ static void format_config_init(struct format_config *cfg)
 	log_config_init(&cfg->log);
 	cfg->cover_from_description_mode = COVER_FROM_MESSAGE;
 	cfg->auto_number = 1;
+	cfg->provenance = -1;
 	string_list_init_dup(&cfg->extra_hdr);
 	string_list_init_dup(&cfg->extra_to);
 	string_list_init_dup(&cfg->extra_cc);
@@ -1096,6 +1099,10 @@ static int git_format_config(const char *var, const char *value,
 			enable_default_display_notes(&cfg->notes_opt, &cfg->show_notes);
 		else
 			disable_display_notes(&cfg->notes_opt, &cfg->show_notes);
+		return 0;
+	}
+	if (!strcmp(var, "format.provenance")) {
+		cfg->provenance = git_config_bool(var, value);
 		return 0;
 	}
 	if (!strcmp(var, "format.coverfromdescription")) {
@@ -2130,6 +2137,8 @@ int cmd_format_patch(int argc,
 			    N_("percentage by which creation is weighted")),
 		OPT_BOOL(0, "force-in-body-from", &force_in_body_from,
 			 N_("show in-body From: even if identical to the e-mail header")),
+		OPT_BOOL(0, "provenance", &cfg.provenance,
+			 N_("show the line record of each commit after the three dashes")),
 		OPT_END()
 	};
 
@@ -2174,6 +2183,8 @@ int cmd_format_patch(int argc,
 			     PARSE_OPT_KEEP_DASHDASH);
 
 	rev.force_in_body_from = force_in_body_from;
+	rev.show_provenance_block = cfg.provenance < 0 ?
+		provenance_enabled(the_repository) : cfg.provenance;
 
 	if (!fmt_patch_suffix)
 		fmt_patch_suffix = cfg.fmt_patch_suffix;
@@ -2263,8 +2274,6 @@ int cmd_format_patch(int argc,
 		die(_("--check does not make sense"));
 	if (rev.remerge_diff)
 		die(_("--remerge-diff does not make sense"));
-	if (rev.diffopt.flags.provenance)
-		die(_("--provenance does not make sense"));
 
 	if (!use_patch_format &&
 		(!rev.diffopt.output_format ||

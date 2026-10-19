@@ -267,6 +267,8 @@ struct rev_info {
 			show_merge:1,
 			show_notes_given:1,
 			show_notes_by_default:1,
+			/* format-patch: the line record after the "---" */
+			show_provenance_block:1,
 			show_signature:1,
 			pretty_given:1,
 			abbrev_commit:1,

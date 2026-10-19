@@ -44,6 +44,7 @@
 #include "provenance.h"
 #include "provenance-commit.h"
 #include "provenance-journal.h"
+#include "provenance-patch.h"
 
 /**
  * Returns the length of the first line of msg.
@@ -1132,6 +1133,7 @@ static void am_next(struct am_state *state)
 
 	oidclr(&state->orig_commit, the_repository->hash_algo);
 	unlink(am_path(state, "original-commit"));
+	unlink(am_path(state, "provenance"));
 	refs_delete_ref(get_main_ref_store(the_repository), NULL,
 			"REBASE_HEAD", NULL, REF_NO_DEREF);
 
@@ -1196,6 +1198,61 @@ static void am_append_signoff(struct am_state *state)
 	strbuf_attach(&sb, state->msg, state->msg_len, state->msg_len + 1);
 	append_signoff(&sb, 0, 0);
 	state->msg = strbuf_detach(&sb, &state->msg_len);
+}
+
+/**
+ * Saves the line record that the "Provenance:" block of the state
+ * directory's "patch" file carries, if any, in its "provenance" file, so
+ * that the commit made from the patch can record it, also after "git am
+ * --continue".  A block that does not parse is ignored with a warning.
+ */
+static void save_mail_provenance(const struct am_state *state)
+{
+	struct strbuf sb = STRBUF_INIT, err = STRBUF_INIT;
+	struct provenance_record rec = PROVENANCE_RECORD_INIT;
+
+	if (read_state_file(&sb, state, "patch", 0) < 0)
+		goto out;
+	switch (provenance_patch_parse(the_repository, sb.buf, sb.len,
+				       &rec, &err)) {
+	case 1:
+		strbuf_reset(&sb);
+		provenance_record_format(&rec, &sb);
+		write_file_buf(am_path(state, "provenance"), sb.buf, sb.len);
+		break;
+	case -1:
+		warning(_("ignoring the provenance record of patch %s: %s"),
+			msgnum(state), err.buf);
+		break;
+	}
+out:
+	provenance_record_release(&rec);
+	strbuf_release(&sb);
+	strbuf_release(&err);
+}
+
+/**
+ * Reads the line record that save_mail_provenance() saved into `rec`.
+ * Returns 1 if there is one, and 0 otherwise.
+ */
+static int read_mail_provenance(const struct am_state *state,
+				struct provenance_record *rec)
+{
+	struct strbuf sb = STRBUF_INIT, err = STRBUF_INIT;
+	int ret = 0;
+
+	if (read_state_file(&sb, state, "provenance", 0) >= 0) {
+		if (provenance_record_parse(sb.buf, sb.len,
+					    the_repository->hash_algo,
+					    rec, &err))
+			warning(_("ignoring the provenance record of patch %s: %s"),
+				msgnum(state), err.buf);
+		else
+			ret = 1;
+	}
+	strbuf_release(&sb);
+	strbuf_release(&err);
+	return ret;
 }
 
 /**
@@ -1301,6 +1358,9 @@ static int parse_mail(struct am_state *state, const char *mail)
 		ret = 1;
 		goto finish;
 	}
+
+	if (provenance_enabled(the_repository))
+		save_mail_provenance(state);
 
 	strbuf_addstr(&msg, "\n\n");
 	strbuf_addbuf(&msg, &mi.log_message);
@@ -1675,9 +1735,9 @@ static void do_commit(const struct am_state *state)
 	struct strbuf sb = STRBUF_INIT;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
-	int record_provenance = state->rebasing &&
-				!is_null_oid(&state->orig_commit) &&
-				provenance_enabled(the_repository);
+	int record_provenance = provenance_enabled(the_repository) &&
+				(!state->rebasing ||
+				 !is_null_oid(&state->orig_commit));
 
 	if (!state->no_verify && run_hooks(the_repository, "pre-applypatch"))
 		exit(1);
@@ -1714,20 +1774,36 @@ static void do_commit(const struct am_state *state)
 				 NULL))
 		die(_("failed to write commit object"));
 
-	/* When rebasing, the patch comes from a commit with its records. */
 	if (record_provenance) {
-		struct provenance_rewrite rw = {
-			.pick = lookup_commit_reference(the_repository,
-							&state->orig_commit),
-		};
+		struct provenance_rewrite rw = { .picks = OID_ARRAY_INIT };
+		struct provenance_record mailed = PROVENANCE_RECORD_INIT;
 
-		if (!rw.pick)
-			die(_("could not parse commit %s"),
-			    oid_to_hex(&state->orig_commit));
+		if (state->rebasing) {
+			/* the patch comes from a commit with its records */
+			rw.pick = lookup_commit_reference(the_repository,
+							  &state->orig_commit);
+			if (!rw.pick)
+				die(_("could not parse commit %s"),
+				    oid_to_hex(&state->orig_commit));
+		} else {
+			/* the mail may carry the line record of its commit */
+			rw.mail = lookup_commit_reference(the_repository,
+							  &commit);
+			if (!rw.mail)
+				die(_("could not parse commit %s"),
+				    oid_to_hex(&commit));
+			if (read_mail_provenance(state, &mailed)) {
+				if (provenance_patch_locate(the_repository,
+							    rw.mail, &mailed))
+					die(_("unable to record provenance"));
+				rw.mail_lines = &mailed;
+			}
+		}
 		if (provenance_commit_records(the_repository,
 				parents, &tree, author,
 				NULL, &rw, &prov_lines, &prov_reasoning))
 			die(_("unable to record provenance"));
+		provenance_record_release(&mailed);
 	}
 
 	reflog_msg = getenv("GIT_REFLOG_ACTION");

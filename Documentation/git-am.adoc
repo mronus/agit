@@ -303,13 +303,40 @@ See the `--verify`/`-n`/`--no-verify` options.
 PROVENANCE
 ----------
 
-`git am` records no provenance for the commits it makes from patches
-(see linkgit:git-provenance[1]), as a patch does not carry the records
-of the commit it was made from.  When linkgit:git-rebase[1] replays
-commits through `git am` (see `--apply` there) and provenance is
-enabled (see `provenance.enabled` in linkgit:git-config[1]), each
-commit made carries the records of the commit it replays, as with
-linkgit:git-cherry-pick[1].
+If provenance is enabled (see `provenance.enabled` in
+linkgit:git-config[1]), `git am` records provenance for each commit it
+makes (see linkgit:git-provenance[1]).  A patch made by
+linkgit:git-format-patch[1] carries the line record of its commit in
+a `Provenance:` block after the three-dash line (see the PROVENANCE
+section there), and `git am` records it for the commit it makes from
+the patch, which may differ from the original: another parent, an
+offset, or a conflict resolved by hand.
+
+Each range of the record is looked for by its content: a range of
+added lines among the lines that the new commit adds to the file, a
+range of removed lines among those it removes, as a run of as many
+lines whose anchor is that of the range.  Where several runs match,
+the one closest to the line numbers of the range is taken.  A range
+that is found gives its lines its mark and its actors, as
+linkgit:git-cherry-pick[1] carries those of the picked commit.  The
+lines that the commit adds or removes and that no range found covers
+are `UNKNOWN` if the record had a range for the file that was not
+found, as when the lines it covers were changed to resolve a
+conflict, and the human's, or those of the stamps made with
+linkgit:git-stamp[1] while resolving it, otherwise.
+
+A patch without a block, as made by a Git that does not record
+provenance, marks every line that the commit adds or removes
+`UNKNOWN`, as a pick of a commit without a line record does; so does
+a block that does not parse, which is ignored with a warning.  The
+reasoning record is not carried by mail, so the sessions that the
+line record names are not in the reasoning record of the new commit.
+The block is kept in the state directory until the commit is made, so
+`git am --continue` after a conflict records it too.
+
+When linkgit:git-rebase[1] replays commits through `git am` (see
+`--apply` there), each commit made carries the records of the commit
+it replays instead, as with linkgit:git-cherry-pick[1].
 
 CONFIGURATION
 -------------

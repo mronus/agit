@@ -670,7 +670,7 @@ static int run_am(struct rebase_options *opts)
 		     "--full-index", "--cherry-pick", "--right-only",
 		     "--default-prefix", "--no-renames",
 		     "--no-cover-letter", "--pretty=mboxrd", "--topo-order",
-		     "--no-base", NULL);
+		     "--no-base", "--no-provenance", NULL);
 	if (opts->git_format_patch_opt.len)
 		strvec_split(&format_patch.args,
 			     opts->git_format_patch_opt.buf);
