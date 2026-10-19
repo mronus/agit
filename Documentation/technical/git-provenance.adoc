@@ -846,8 +846,20 @@ Maintenance
 
 - `provenance verify` is the `fsck` of provenance.
 
-- `fast-export` and `fast-import` already carry notes, so migrations
-  and `filter-repo` can carry records.
+- `fast-export` and `fast-import` carry the provenance refs as the
+  notes refs they are, as ordinary commits: `fast-export --all`, or
+  an export that names the refs, imported into a new repository
+  reproduces them byte for byte, and the records verify there.
+  `fast-export` adds nothing implicitly, so an export of a branch
+  alone carries no records. The records are keyed by commit id, so
+  they only describe the imported commits if the stream keeps the
+  ids: an import that changes them, as with `--reencode=yes` or an
+  edited stream (`filter-repo`), leaves the records attached to the
+  old ids, where no commit uses them; carrying them over needs a
+  stream extension (see "Future Work"). The notes
+  commits of the provenance refs carry an `encoding` header when
+  `i18n.commitEncoding` is set, as those of `git notes` do, so
+  `fast-export` needs `--reencode` for them as for the other commits.
 
 - `format-patch` adds the line record of each commit to its mail, in a
   `Provenance:` block after the `---` separator, where the notes of

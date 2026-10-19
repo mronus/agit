@@ -1659,6 +1659,20 @@ operator can use this facility to peek at the objects and refs from an
 import in progress, at the cost of some added running time and worse
 compression.
 
+[[PROVENANCE]]
+PROVENANCE
+----------
+
+The provenance records of commits (see linkgit:git-provenance[1]) are
+notes under `refs/provenance/lines` and `refs/provenance/reasoning`,
+keyed by the object name of the commit they describe, and a stream
+from linkgit:git-fast-export[1] carries them as ordinary commits when
+these refs are named in the export or `--all` is used.  They describe
+the imported commits only if those keep their object names: a stream
+that changes a commit, or its parents, leaves its records attached to
+the old object name.  `git fast-import` does not rewrite the records
+for the commits it makes.
+
 CONFIGURATION
 -------------
 

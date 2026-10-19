@@ -3,7 +3,7 @@
 # Copyright (c) 2026 M. Abdullah Onus
 #
 
-test_description='Test carrying provenance records in patch mails'
+test_description='Test carrying provenance records in patch mails and streams'
 
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
@@ -358,6 +358,48 @@ test_expect_success 'am of a root commit records its block' '
 	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
 	check_lines HEAD &&
 	git provenance verify HEAD
+'
+
+test_expect_success 'fast-export --all and fast-import carry the records' '
+	git checkout main &&
+	git fast-export --all >all.out &&
+	git init all.git &&
+	git -C all.git fast-import --quiet <all.out &&
+	for ref in refs/provenance/lines refs/provenance/reasoning
+	do
+		git rev-parse $ref >expect &&
+		git -C all.git rev-parse $ref >actual &&
+		test_cmp expect actual || return 1
+	done &&
+	git rev-list --branches >commits.out &&
+	git -C all.git provenance verify $(cat commits.out) &&
+	git log -p --provenance --branches >expect &&
+	git -C all.git log -p --provenance --branches >actual &&
+	test_cmp expect actual &&
+	test_grep "^A+three\$" actual
+'
+
+test_expect_success 'fast-export of a branch carries no records' '
+	git fast-export main >main.out &&
+	git init main.git &&
+	git -C main.git fast-import --quiet <main.out &&
+	test_must_fail git -C main.git rev-parse --verify -q \
+		refs/provenance/lines &&
+	test_must_fail git -C main.git provenance show main
+'
+
+test_expect_success 'records stay with the old commits when ids change' '
+	sed -e "s/^committer C O Mitter/committer C O Mutter/" all.out \
+		>changed.out &&
+	git init changed.git &&
+	git -C changed.git fast-import --quiet <changed.out &&
+	old=$(git rev-parse ai) &&
+	test "$(git -C changed.git rev-parse ai)" != "$old" &&
+	test_must_fail git -C changed.git provenance show ai &&
+	git -C changed.git ls-tree -r --name-only refs/provenance/lines \
+		>notes.out &&
+	tr -d / <notes.out >actual &&
+	test_grep "^$old\$" actual
 '
 
 test_done
