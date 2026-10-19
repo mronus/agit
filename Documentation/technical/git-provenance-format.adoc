@@ -424,7 +424,9 @@ the repository.
 
 `claim <ts> <session> patch <patch-blob>`::
 	The session declares that it wrote the changes in the patch
-	stored in `<patch-blob>`.
+	stored in `<patch-blob>`, a unified diff whose paths carry the
+	`a/` and `b/` prefixes: the runs of lines that its hunks add or
+	remove, wherever the commit adds or removes them.
 
 A snapshot is the tree that "git add -A" followed by "git write-tree"
 would produce, written without touching the index.  When a stamp is

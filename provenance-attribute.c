@@ -15,6 +15,7 @@
 #include "oidset.h"
 #include "provenance.h"
 #include "provenance-journal.h"
+#include "provenance-patch.h"
 #include "quote.h"
 #include "repository.h"
 #include "revision.h"
@@ -66,6 +67,8 @@ struct session_info {
 	const struct object_id *summary;
 	/* paths claimed by "claim" entries, sorted */
 	struct string_list claims;
+	/* path -> the hunks claimed by "claim --patch" (struct hunks) */
+	struct strmap hunks;
 	/* the session has "end" or "edit" entries */
 	unsigned stamped : 1;
 	/* every human line is the session's ("--session" without stamps) */
@@ -76,6 +79,20 @@ struct session_info {
 	unsigned imported : 1;
 	/* the "source" of the actor in the line record of a source, or NULL */
 	const char *source;
+};
+
+/*
+ * The runs of lines that the hunks of the patches a session claims add
+ * to a path (`+` ranges, numbered as in the post-image of their hunk)
+ * or remove from it (`-` ranges, as in the pre-image), with their
+ * anchors.  They are located in the changes of the commit when its
+ * lines are attributed.
+ */
+struct hunks {
+	struct provenance_range *ranges;
+	/* per range: the journal entry of its patch */
+	size_t *entry;
+	size_t nr, alloc, entry_alloc;
 };
 
 /* A path changed by an interval. */
@@ -286,23 +303,113 @@ static int session_index(struct attribution *a, const char *id)
 	memset(s, 0, sizeof(*s));
 	s->id = id;
 	string_list_init_dup(&s->claims);
+	strmap_init(&s->hunks);
 	return a->sessions_nr++;
 }
 
+static void session_info_release(struct session_info *s)
+{
+	struct hashmap_iter iter;
+	struct strmap_entry *e;
+
+	string_list_clear(&s->claims, 0);
+	strmap_for_each_entry(&s->hunks, &iter, e) {
+		struct hunks *h = e->value;
+
+		free(h->ranges);
+		free(h->entry);
+	}
+	strmap_clear(&s->hunks, 1);
+	free(s->actor_id);
+}
+
+/* A run of lines on one side of a hunk, as it is read. */
+struct hunk_run {
+	struct strbuf text;
+	/* '+' or '-', or 0 if there is no run */
+	char side;
+	unsigned long begin, nr;
+};
+
 /*
- * Claim the paths of a patch: those named by its "+++ b/<path>" and
- * "--- a/<path>" lines.  This is an approximation: the whole of each
- * path is claimed, not only the hunks of the patch.
+ * Add `run`, if there is one, of the patch of the journal entry
+ * `entry` to the hunks that `s` claims in `path`, unless `path` is
+ * empty, and start over.
+ */
+static void flush_run(struct attribution *a, struct session_info *s,
+		      size_t entry, const char *path, struct hunk_run *run)
+{
+	struct provenance_range *range;
+	struct hunks *h;
+
+	if (run->side && *path) {
+		h = strmap_get(&s->hunks, path);
+		if (!h) {
+			CALLOC_ARRAY(h, 1);
+			strmap_put(&s->hunks, path, h);
+		}
+		ALLOC_GROW(h->ranges, h->nr + 1, h->alloc);
+		ALLOC_GROW(h->entry, h->nr + 1, h->entry_alloc);
+		range = &h->ranges[h->nr];
+		memset(range, 0, sizeof(*range));
+		range->side = run->side;
+		range->begin = run->begin;
+		range->end = run->begin + run->nr - 1;
+		hash_object_file(a->r->hash_algo, run->text.buf, run->text.len,
+				 OBJ_BLOB, &range->anchor);
+		h->entry[h->nr++] = entry;
+	}
+	strbuf_reset(&run->text);
+	run->side = 0;
+}
+
+/*
+ * Parse the path of a "--- " or "+++ " line of a patch, the `len`
+ * bytes at `p`, into `path`, without its `prefix`.  `path` is left
+ * empty if the line names no such path, as for "/dev/null".
+ */
+static void patch_path(const char *p, size_t len, const char *prefix,
+		       struct strbuf *path)
+{
+	struct strbuf buf = STRBUF_INIT;
+	const char *rest;
+
+	strbuf_reset(path);
+	if (*p == '"') {
+		struct strbuf quoted = STRBUF_INIT;
+
+		strbuf_add(&quoted, p, len);
+		if (unquote_c_style(&buf, quoted.buf, NULL))
+			strbuf_reset(&buf);
+		strbuf_release(&quoted);
+	} else {
+		const char *tab = memchr(p, '\t', len);
+
+		strbuf_add(&buf, p, tab ? (size_t)(tab - p) : len);
+	}
+	if (skip_prefix(buf.buf, prefix, &rest))
+		strbuf_addstr(path, rest);
+	strbuf_release(&buf);
+}
+
+/*
+ * Claim the hunks of a patch: the runs of lines that they add to the
+ * path of a "+++ b/<path>" line and remove from the path of a "---
+ * a/<path>" line.  apply_claims() locates them in the changes of the
+ * commit.
  */
 static void claim_patch(struct attribution *a, size_t entry,
 			struct session_info *s)
 {
 	const struct object_id *oid = &a->journal->entries[entry].oid;
-	struct strbuf path = STRBUF_INIT;
+	struct strbuf old_path = STRBUF_INIT, new_path = STRBUF_INIT;
+	struct hunk_run run = { .text = STRBUF_INIT };
+	unsigned long old_line = 0, new_line = 0, old_left = 0, new_left = 0;
 	enum object_type type;
 	size_t size;
 	char *buf = odb_read_object(a->r->objects, oid, &type, &size);
 	const char *line, *end;
+	char last = 0;
 
 	if (!buf || type != OBJ_BLOB) {
 		free(buf);
@@ -313,33 +420,76 @@ static void claim_patch(struct attribution *a, size_t entry,
 	for (line = buf, end = buf + size; line < end; ) {
 		const char *eol = memchr(line, '\n', end - line);
 		size_t len = eol ? (size_t)(eol - line) : (size_t)(end - line);
-		const char *p, *rest, *prefix = NULL;
+		const char *p = line, *q;
+		/* an empty line of a hunk is an empty context line */
+		char c = len ? *line : ' ';
 
-		if (skip_prefix_mem(line, len, "+++ ", &p, &len))
-			prefix = "b/";
-		else if (skip_prefix_mem(line, len, "--- ", &p, &len))
-			prefix = "a/";
 		line = eol ? eol + 1 : end;
-		if (!prefix)
+		if (c == '\\') {
+			/* the line before has no LF at the end of the file */
+			if (last && last == run.side)
+				strbuf_strip_suffix(&run.text, "\n");
+			last = 0;
 			continue;
-
-		strbuf_reset(&path);
-		if (*p == '"') {
-			struct strbuf quoted = STRBUF_INIT;
-
-			strbuf_add(&quoted, p, len);
-			if (unquote_c_style(&path, quoted.buf, NULL))
-				strbuf_reset(&path);
-			strbuf_release(&quoted);
-		} else {
-			const char *tab = memchr(p, '\t', len);
-
-			strbuf_add(&path, p, tab ? (size_t)(tab - p) : len);
 		}
-		if (skip_prefix(path.buf, prefix, &rest) && *rest)
-			string_list_append(&s->claims, rest);
+		if ((old_left || new_left) &&
+		    (c == ' ' || c == '-' || c == '+')) {
+			if (c != run.side)
+				flush_run(a, s, entry, run.side == '-' ?
+					  old_path.buf : new_path.buf, &run);
+			if (c != ' ') {
+				if (!run.side) {
+					run.side = c;
+					run.begin = c == '-' ? old_line : new_line;
+					run.nr = 0;
+				}
+				strbuf_add(&run.text, p + 1, len - 1);
+				strbuf_addch(&run.text, '\n');
+				run.nr++;
+			}
+			if (c != '+' && old_left) {
+				old_line++;
+				old_left--;
+			}
+			if (c != '-' && new_left) {
+				new_line++;
+				new_left--;
+			}
+			last = c;
+			continue;
+		}
+
+		flush_run(a, s, entry, run.side == '-' ?
+			  old_path.buf : new_path.buf, &run);
+		last = 0;
+		old_left = new_left = 0;
+		if (skip_prefix_mem(p, len, "--- ", &q, &len)) {
+			patch_path(q, len, "a/", &old_path);
+		} else if (skip_prefix_mem(p, len, "+++ ", &q, &len)) {
+			patch_path(q, len, "b/", &new_path);
+		} else if (skip_prefix_mem(p, len, "@@ -", &q, &len)) {
+			char *e;
+
+			old_line = strtoul(q, &e, 10);
+			old_left = *e == ',' ? strtoul(e + 1, &e, 10) : 1;
+			if (!skip_prefix(e, " +", &q)) {
+				old_left = 0;
+				continue;
+			}
+			new_line = strtoul(q, &e, 10);
+			new_left = *e == ',' ? strtoul(e + 1, &e, 10) : 1;
+			if (*e != ' ')
+				old_left = new_left = 0;
+		} else if (skip_prefix_mem(p, len, "diff ", &q, &len)) {
+			strbuf_reset(&old_path);
+			strbuf_reset(&new_path);
+		}
 	}
-	strbuf_release(&path);
+	flush_run(a, s, entry, run.side == '-' ?
+		  old_path.buf : new_path.buf, &run);
+	strbuf_release(&run.text);
+	strbuf_release(&old_path);
+	strbuf_release(&new_path);
 	free(buf);
 }
 
@@ -388,7 +538,7 @@ static void collect_sessions(struct attribution *a, const char *session)
 			warning(_("session '%s' has no stamps in the journal; "
 				  "recording its changes as declared "
 				  "(see 'git stamp claim')"), session);
-			if (!s->claims.nr)
+			if (!s->claims.nr && !strmap_get_size(&s->hunks))
 				s->claim_all = 1;
 		}
 	}
@@ -1289,27 +1439,100 @@ static int drop_others(struct attribution *a, const char *path,
 	return ret;
 }
 
-/* Give the human lines of claimed paths to the declared sessions. */
-static void apply_claims(struct attribution *a, const char *path,
-			 struct file_state *fs)
+/*
+ * Mark in `added` the lines of the file, at its version in the commit,
+ * and in `deleted` those of its version `pre` in the first parent,
+ * that the hunks `h` of the session `s` claim, locating the hunks of
+ * each patch together.  A hunk that is not found claims nothing, with
+ * a warning.  Returns -1 if `pre` cannot be read.
+ */
+static int locate_hunks(struct attribution *a, const struct session_info *s,
+			const char *path, const struct hunks *h,
+			const struct object_id *pre,
+			const struct file_state *fs,
+			char *added, char *deleted)
+{
+	struct provenance_range *ranges;
+	mmfile_t old;
+	char *found;
+	int lost = 0;
+
+	if (read_blob(a, pre, &old))
+		return -1;
+	DUP_ARRAY(ranges, h->ranges, h->nr);
+	CALLOC_ARRAY(found, h->nr);
+	for (size_t i = 0, j; i < h->nr; i = j) {
+		for (j = i + 1; j < h->nr && h->entry[j] == h->entry[i]; j++)
+			; /* find the end of the ranges of the patch */
+		if (provenance_patch_locate_ranges(a->r, &old, &fs->content,
+						   ranges + i, j - i,
+						   found + i))
+			memset(found + i, 0, j - i);
+	}
+	for (size_t i = 0; i < h->nr; i++) {
+		const struct provenance_range *range = &ranges[i];
+
+		if (!found[i])
+			lost = 1;
+		else
+			memset((range->side == '+' ? added : deleted) +
+			       range->begin - 1, 1,
+			       range->end - range->begin + 1);
+	}
+	if (lost)
+		warning(_("session '%s' claims hunks of '%s' that are not "
+			  "among the changes; they are not claimed"),
+			s->id, path);
+	free(ranges);
+	free(found);
+	free(old.ptr);
+	return 0;
+}
+
+/*
+ * Give the human lines of claimed paths, and of the claimed hunks of
+ * the patches, to the declared sessions.  `pre` is the version of the
+ * file in the first parent.  Returns 0 on success, or -1 after
+ * reporting an error.
+ */
+static int apply_claims(struct attribution *a, const char *path,
+			const struct object_id *pre, struct file_state *fs)
 {
 	int human = singleton(a, a->human);
 
 	for (size_t i = 0; i < a->sessions_nr; i++) {
-		const struct session_info *s = &a->sessions[i];
-		int set;
+		struct session_info *s = &a->sessions[i];
+		const struct hunks *h = strmap_get(&s->hunks, path);
+		char *added = NULL, *deleted = NULL;
+		int whole, set;
 
-		if (s->stamped ||
-		    (!s->claim_all && !string_list_has_string(&s->claims, path)))
+		if (s->stamped)
 			continue;
+		whole = s->claim_all ||
+			string_list_has_string(&s->claims, path);
+		if (!whole && !h)
+			continue;
+		if (!whole) {
+			CALLOC_ARRAY(added, fs->nr);
+			CALLOC_ARRAY(deleted, fs->base_nr);
+			if (locate_hunks(a, s, path, h, pre, fs,
+					 added, deleted)) {
+				free(added);
+				free(deleted);
+				return -1;
+			}
+		}
 		set = singleton(a, i);
 		for (size_t j = 0; j < fs->nr; j++)
-			if (fs->owners[j].set == human)
+			if (fs->owners[j].set == human && (whole || added[j]))
 				fs->owners[j].set = set;
 		for (size_t j = 0; j < fs->base_nr; j++)
-			if (fs->deleted[j] == human)
+			if (fs->deleted[j] == human && (whole || deleted[j]))
 				fs->deleted[j] = set;
+		free(added);
+		free(deleted);
 	}
+	return 0;
 }
 
 /*
@@ -1582,7 +1805,9 @@ static int attribute_file(struct attribution *a, const char *path,
 	ret = drop_others(a, path, &fs, &pre);
 	if (ret)
 		goto out;
-	apply_claims(a, path, &fs);
+	ret = apply_claims(a, path, &pre, &fs);
+	if (ret)
+		goto out;
 	ret = add_file(a, path, &pre, &post, &fs, rec);
 
 out:
@@ -1745,6 +1970,7 @@ static int *import_actors(struct attribution *a,
 			s->id = actor->session;
 			s->actor_id = xstrdup(actor->id);
 			string_list_init_dup(&s->claims);
+			strmap_init(&s->hunks);
 			s->imported = 1;
 		}
 		s = &a->sessions[j];
@@ -1984,10 +2210,8 @@ static void attribution_release(struct attribution *a)
 	}
 	free(a->seeds);
 	oidset_clear(&a->other_blobs);
-	for (size_t i = 0; i < a->sessions_nr; i++) {
-		string_list_clear(&a->sessions[i].claims, 0);
-		free(a->sessions[i].actor_id);
-	}
+	for (size_t i = 0; i < a->sessions_nr; i++)
+		session_info_release(&a->sessions[i]);
 	free(a->sessions);
 	for (size_t i = 0; i < a->sets_nr; i++)
 		free(a->sets[i].actors);
