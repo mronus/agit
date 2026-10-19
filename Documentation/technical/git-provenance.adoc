@@ -1068,46 +1068,6 @@ The following were decided during design and are reflected above:
    does) is deferred; it is a transport, not a capability, and creates
    no events an editor does not already expose.
 
-Roadmap
--------
-Each step is implemented and reviewed on its own:
-
-1. Formats and library: the record formats, `provenance.c` on top of
-   `notes.c`, and `provenance show`/`verify`.
-
-2. Capture: the journal, `git stamp`, the attribution walk, and
-   commit integration in a single ref transaction, including
-   `--session` and the advice message for commits made without it.
-   Adapters for particular agents live in a separate repository and
-   are not part of this series.
-
-3. Viewing: `--provenance` for `diff`, `show`, `log` and `blame`;
-   pretty-format placeholders.
-
-4. Transfer: default refspecs, merge on fetch, push with retry.
-
-5. Rewrites: (a) remapping in amend, rebase and cherry-pick, with
-   lines taken from commits without records marked `UNKNOWN`;
-   (b) `adopt` for foreign rewrites, the marks of lines a revert
-   restores taken from a blame of the parent, the records of a fixup
-   or squash finished by a hand-run `git commit`, and those of
-   `cherry-pick --no-commit` (done).
-
-6. Hardening:
-   (a) merge commits: conflict resolutions, `merge --squash` picks
-   (done);
-   (b) transfer: a per-remote opt-out, `remote prune`, `remove` and
-   `rename` of the tracking refs, the tracking refs after a push, and
-   pushes that hooks reject (done);
-   (c) a CI job running the upstream suite with provenance enabled,
-   and the fixes it needs (done);
-   (d) `format-patch`/`am` and `fast-export`/`fast-import` (done);
-   (e) `purge`, and the merge on fetch after a rewrite (done);
-   (f) the query cache and repository-wide queries;
-   (g) a CI bot.
-
-7. Deferred: the stamp daemon.
-
 Alternatives Considered
 -----------------------
 A new object type carried by commits::
@@ -1159,6 +1119,9 @@ Future Work
 
 - Adopting the commits that `fetch` brings in, through a hook or an
   opt-in configuration.
+
+- A query cache for repository-wide questions, such as the share of
+  AI-written lines over a range of history.
 
 Related Links
 -------------
