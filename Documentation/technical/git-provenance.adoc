@@ -716,11 +716,12 @@ Both checks live in the functions that make the implicit refspecs, so
 every caller inherits them. A remote without provenance refs is not
 an error; the refs are not written to `FETCH_HEAD`; `--prune` prunes
 their tracking refs. Nothing is added for a URL, for `--prefetch`, for
-a fetch whose refspecs only name object ids and store them in no ref
-(the lazy fetch of a partial clone, which must not move refs under a
-command that only wanted an object), or for a provenance ref that the
-refspecs already map, which covers the `+refs/*:refs/*` of
-`clone --mirror`.
+`clone --revision`, which fetches the history of one revision and
+makes no other refs, for a fetch whose refspecs only name object ids
+and store them in no ref (the lazy fetch of a partial clone, which
+must not move refs under a command that only wanted an object), or for
+a provenance ref that the refspecs already map, which covers the
+`+refs/*:refs/*` of `clone --mirror`.
 
 The tracking refs belong to their remote as its remote-tracking
 branches do, and `git remote` maintains them alike. `remote remove`

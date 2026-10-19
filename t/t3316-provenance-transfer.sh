@@ -121,6 +121,12 @@ test_expect_success 'clone --mirror has the refs directly' '
 	test_cmp expect actual
 '
 
+test_expect_success 'clone --revision makes no provenance refs' '
+	git clone --revision=main remote.git revision &&
+	provenance_refs revision >actual &&
+	test_must_be_empty actual
+'
+
 test_expect_success 'fetch brings new records and fast-forwards the local refs' '
 	commit_in src two s2 &&
 	git -C src push 2>err &&
