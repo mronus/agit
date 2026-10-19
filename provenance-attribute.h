@@ -94,9 +94,10 @@ struct provenance_source {
  * Documentation/technical/git-provenance.adoc.
  *
  * The changes of each source are attributed as its line record says,
- * or undone if it is a revert, before the stamps in `journal`.  The lines that a source without a
- * line record changes, like those its record marks UNKNOWN, are of
- * unknown origin, and stay UNKNOWN however they are edited after.
+ * or undone if it is a revert, before the stamps in `journal`.  The
+ * lines that a source without a line record changes, like those its
+ * record marks UNKNOWN, are of unknown origin, and stay UNKNOWN
+ * however they are edited after.
  *
  * With PROVENANCE_REWRITE_AMEND and other sources, the commit being
  * amended is a version the commit was made from: the chain of each
