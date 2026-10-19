@@ -1270,6 +1270,7 @@ LIB_OBJS += provenance-commit.o
 LIB_OBJS += provenance-journal.o
 LIB_OBJS += provenance-patch.o
 LIB_OBJS += provenance-purge.o
+LIB_OBJS += provenance-remap.o
 LIB_OBJS += provenance-stat.o
 LIB_OBJS += provenance-transfer.o
 LIB_OBJS += provenance-view.o

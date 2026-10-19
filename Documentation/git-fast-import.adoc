@@ -1671,7 +1671,11 @@ these refs are named in the export or `--all` is used.  They describe
 the imported commits only if those keep their object names: a stream
 that changes a commit, or its parents, leaves its records attached to
 the old object name.  `git fast-import` does not rewrite the records
-for the commits it makes.
+for the commits it makes.  Its `--export-marks` file and that of the
+export give each commit the same mark, so that joining the two maps
+the old object names to the new ones, and `git provenance remap`
+carries the records over along that map (see
+linkgit:git-provenance[1]).
 
 CONFIGURATION
 -------------

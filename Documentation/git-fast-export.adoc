@@ -313,7 +313,12 @@ an export of a branch alone carries no records.  Imported by
 linkgit:git-fast-import[1], the records are found again as long as
 the commits keep their object names; a stream that changes them, as
 with `--reencode=yes` or after an edit, leaves the records attached
-to the old object names, where no commit uses them.
+to the old object names, where no commit uses them.  With
+`--export-marks` here and in the import, the two marks files give
+each commit of the stream the same mark, and joining them maps the
+old object names to the new ones: `git provenance remap` reads that
+map and carries the records over to the new commits (see
+linkgit:git-provenance[1]).
 
 LIMITATIONS
 -----------
