@@ -223,10 +223,7 @@ reasoning record, which states that no AI was involved.
 
 Full transcripts are optional, policy-controlled
 (`provenance.reasoning.transcripts`), and the first thing to drop for
-privacy. The initial implementation stores the reasoning record as a
-single blob; storing sessions and transcripts as separate blobs under
-a per-commit tree, so that they can be fetched and purged
-individually, is future work.
+privacy. The reasoning record is stored as a single blob.
 
 Marks
 ~~~~~
@@ -871,8 +868,8 @@ then. Size is controlled where the data is written, by
 `provenance.reasoning.transcripts`.
 
 Shallow clones, bundles and partial clones need no changes to carry
-the refs; whether a partial-clone filter should exclude reasoning
-blobs is future work.
+the refs; a partial-clone filter treats reasoning blobs as any other
+blob.
 
 Maintenance
 ~~~~~~~~~~~
@@ -895,8 +892,7 @@ Maintenance
   they only describe the imported commits if the stream keeps the
   ids: an import that changes them, as with `--reencode=yes` or an
   edited stream (`filter-repo`), leaves the records attached to the
-  old ids, where no commit uses them; carrying them over needs a
-  stream extension (see "Future Work"). The notes
+  old ids, where no commit uses them. The notes
   commits of the provenance refs carry an `encoding` header when
   `i18n.commitEncoding` is set, as those of `git notes` do, so
   `fast-export` needs `--reencode` for them as for the other commits.
@@ -1065,33 +1061,6 @@ Performance
   dominate, which is why they are optional, separate and lazily
   fetchable.
 
-Decisions
----------
-The following were decided during design and are reflected above:
-
-1. `MIXED` is line-level with threshold 0: any touch by the other
-   actor makes a line `MIXED`.
-
-2. Lines with no stamp are `HUMAN` in any commit made with provenance
-   enabled. `UNKNOWN` marks lines the extension never watched being
-   written: commits with no record, and the lines a rewrite takes from
-   them.
-
-3. Integrity and privacy follow Git's norm: no commitments or
-   scanning inside the extension, and no redaction but the one the
-   user asks for with `provenance purge`.
-
-4. Reasoning is fetched by default.
-
-5. Agents report their changes through the `stamp` protocol; the
-   harness calls `begin`/`end` around each edit and marks are
-   assembled at commit time.
-
-6. The capture transport is the command line. A resident daemon
-   speaking the same verbs over `simple-ipc` (as `fsmonitor--daemon`
-   does) is deferred; it is a transport, not a capability, and creates
-   no events an editor does not already expose.
-
 Alternatives Considered
 -----------------------
 A new object type carried by commits::
@@ -1126,28 +1095,6 @@ Records under a ref, keyed by commit (the notes model)::
 	Chosen. No change to the object, pack or wire formats; mutable
 	and separable; needs remapping on rewrite, which anchors make
 	recoverable.
-
-Future Work
------------
-- Per-commit reasoning trees with transcripts as separate blobs.
-
-- A partial-clone filter that excludes reasoning blobs.
-
-- A `fast-import` stream extension for records, gated by a `feature`
-  command, so that history rewriting tools carry provenance.
-
-- The stamp daemon.
-
-- Coverage checking in `provenance verify`: that the recorded ranges
-  match the commit's actual diff.
-
-- Adopting the commits that `fetch` brings in, through a hook or an
-  opt-in configuration.
-
-- The share of AI-written lines in the current tree, which is a blame
-  of every file rather than a sum of records.
-
-- Breakdowns of `provenance stat` by model and by session.
 
 Related Links
 -------------

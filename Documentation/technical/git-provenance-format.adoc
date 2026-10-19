@@ -190,8 +190,8 @@ prints.  The blob is never written to the object database.
 
 Anchors make a record self-checking: a record that does not match the
 content of its commit is detected by recomputing them.  They also
-allow a later version of the extension to find the same content in a
-rewritten commit and re-attach the record to it.
+let the extension find the same content in a rewritten commit and
+re-attach the record to it, as `git provenance adopt` does.
 
 
 Records written by `git commit`
@@ -282,13 +282,6 @@ A commit that rewrites others first lists the sessions of the
 reasoning records of those it does not revert, in order and each
 once, and their summaries come first; a session listed there is not
 listed again.  Transcripts are not stored by version 1.
-
-The design calls for a reasoning record to be a tree, holding the
-summary together with per-session metadata and optional transcripts,
-so that pieces can be fetched or redacted on their own.  Version 1
-stores only a single blob; the tree form is deferred to a later
-version of this format.
-
 
 Verification
 ------------
