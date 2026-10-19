@@ -420,7 +420,7 @@ test_expect_success 'claims declare the claimed paths only' '
 	git provenance verify HEAD
 '
 
-test_expect_success 'claims of a patch declare the paths it names' '
+test_expect_success 'claims of a patch declare the lines it changes' '
 	echo 13 >>file &&
 	echo s >>other &&
 	git diff -- other >patch &&
@@ -434,6 +434,99 @@ test_expect_success 'claims of a patch declare the paths it names' '
 		echo "+ 13 HUMAN human $(anchor HEAD file 13)" &&
 		echo "file other" &&
 		echo "+ 4 AI s10 $(anchor HEAD other 4)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a patch claims the lines of its hunks only' '
+	test_write_lines a b c d e >hunks &&
+	git add hunks &&
+	git commit -m hunks &&
+	test_write_lines a B c d e >hunks &&
+	git diff -- hunks >patch &&
+	test_write_lines a B c d e f >hunks &&
+	git stamp claim --session s20 --patch patch &&
+	git commit -a -m claimed-hunk 2>err &&
+	test_grep ! "not among the changes" err &&
+	{
+		header HEAD declared &&
+		echo "actor s20 ai model=unknown tool=unknown session=s20 source=declared" &&
+		echo "$human_actor" &&
+		echo "file hunks" &&
+		echo "+ 2 AI s20 $(anchor HEAD hunks 2)" &&
+		echo "+ 6 HUMAN human $(anchor HEAD hunks 6)" &&
+		echo "- 2 AI s20 $(anchor HEAD^ hunks 2)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a claimed hunk is found where a later edit moved it' '
+	test_write_lines a B c d e f g >hunks &&
+	git diff -- hunks >patch &&
+	git stamp claim --session s21 --patch patch &&
+	git stamp claim --session s21 --patch patch &&
+	test_write_lines 0 a B c d e f g >hunks &&
+	git commit -a -m moved-hunk 2>err &&
+	test_grep ! "not among the changes" err &&
+	{
+		header HEAD declared &&
+		echo "$human_actor" &&
+		echo "actor s21 ai model=unknown tool=unknown session=s21 source=declared" &&
+		echo "file hunks" &&
+		echo "+ 1 HUMAN human $(anchor HEAD hunks 1)" &&
+		echo "+ 8 AI s21 $(anchor HEAD hunks 8)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a claimed hunk that is gone claims nothing' '
+	test_write_lines 0 a B c d e f g h >hunks &&
+	git diff -- hunks >patch &&
+	git stamp claim --session s22 --patch patch &&
+	test_write_lines 0 a B c d e f g H >hunks &&
+	git commit -a -m gone-hunk 2>err &&
+	grep "claims hunks of" err >actual &&
+	echo "warning: session ${SQ}s22${SQ} claims hunks of ${SQ}hunks${SQ} that are not among the changes; they are not claimed" >expect &&
+	test_cmp expect actual &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "file hunks" &&
+		echo "+ 9 HUMAN human $(anchor HEAD hunks 9)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a claimed hunk that only removes lines' '
+	test_write_lines 0 a B c e f g H >hunks &&
+	git diff -- hunks >patch &&
+	git stamp claim --session s23 --patch patch &&
+	git commit -a -m removed-hunk &&
+	{
+		header HEAD declared &&
+		echo "actor s23 ai model=unknown tool=unknown session=s23 source=declared" &&
+		echo "file hunks" &&
+		echo "- 5 AI s23 $(anchor HEAD^ hunks 5)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'a path claim claims the whole path' '
+	test_write_lines 1 a B c e f g H 2 >hunks &&
+	git stamp claim --session s24 hunks &&
+	git commit -a -m whole-path &&
+	{
+		header HEAD declared &&
+		echo "actor s24 ai model=unknown tool=unknown session=s24 source=declared" &&
+		echo "file hunks" &&
+		echo "+ 1 AI s24 $(anchor HEAD hunks 1)" &&
+		echo "+ 9 AI s24 $(anchor HEAD hunks 9)" &&
+		echo "- 1 AI s24 $(anchor HEAD^ hunks 1)"
 	} >expect &&
 	check_lines HEAD &&
 	git provenance verify HEAD

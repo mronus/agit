@@ -66,17 +66,23 @@ static int read_source(struct repository *r, struct commit *commit,
 	return ret;
 }
 
-/* Add `commit` to `sources`, unless it is there already. */
+/*
+ * Add `commit` to `sources`, picked or reverted as `revert` says,
+ * unless it is there already as such.
+ */
 static void add_source(struct provenance_source **sources, size_t *nr,
-		       size_t *alloc, struct commit *commit, int tentative)
+		       size_t *alloc, struct commit *commit, int tentative,
+		       int revert)
 {
 	for (size_t i = 0; i < *nr; i++)
-		if ((*sources)[i].commit == commit)
+		if ((*sources)[i].commit == commit &&
+		    (*sources)[i].revert == !!revert)
 			return;
 	ALLOC_GROW(*sources, *nr + 1, *alloc);
 	memset(&(*sources)[*nr], 0, sizeof(**sources));
 	(*sources)[*nr].commit = commit;
 	(*sources)[*nr].tentative = tentative;
+	(*sources)[*nr].revert = !!revert;
 	(*nr)++;
 }
 
@@ -100,25 +106,26 @@ int provenance_commit_records(struct repository *r,
 	char *human = NULL;
 	int ret = 0;
 
-	if (rw && rw->revert && (rw->amend || !rw->pick || rw->picks.nr))
+	if (rw && rw->revert && (rw->amend || !rw->pick))
 		BUG("provenance: a revert must have a pick and no amend");
 	if (rw && rw->mail && (rw->amend || rw->pick || rw->picks.nr))
 		BUG("provenance: a mail must be the only source");
 	if (rw && rw->mail)
-		add_source(&sources, &nr, &alloc, rw->mail, 0);
+		add_source(&sources, &nr, &alloc, rw->mail, 0, 0);
 	if (rw && rw->amend)
-		add_source(&sources, &nr, &alloc, rw->amend, 0);
+		add_source(&sources, &nr, &alloc, rw->amend, 0, 0);
 	if (rw && rw->pick)
-		add_source(&sources, &nr, &alloc, rw->pick, 0);
+		add_source(&sources, &nr, &alloc, rw->pick, 0, rw->revert);
 	for (size_t i = 0; rw && i < rw->picks.nr; i++) {
-		const struct object_id *oid = &rw->picks.oid[i];
-		struct commit *c = lookup_commit_reference_gently(r, oid, 1);
+		const struct provenance_pick *pick = &rw->picks.items[i];
+		struct commit *c = lookup_commit_reference_gently(r, &pick->oid,
+								  1);
 
 		if (!c)
 			warning(_("ignoring the pick %s: not a commit"),
-				oid_to_hex(oid));
+				oid_to_hex(&pick->oid));
 		else
-			add_source(&sources, &nr, &alloc, c, 1);
+			add_source(&sources, &nr, &alloc, c, 1, pick->revert);
 	}
 
 	/* the changes of a commit without a line record are UNKNOWN */
@@ -156,8 +163,6 @@ int provenance_commit_records(struct repository *r,
 
 	if (rw && rw->amend)
 		flags |= PROVENANCE_REWRITE_AMEND;
-	if (rw && rw->revert)
-		flags |= PROVENANCE_REWRITE_REVERT;
 	if (provenance_journal_read(r, &journal) ||
 	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
 					 flags, &journal, session,
@@ -179,7 +184,8 @@ out:
 
 /*
  * Write `record` as the note for `commit` under the notes ref `ref`,
- * and queue the update of `ref` into `transaction`.
+ * or remove the note if `record` is NULL, and queue the update of
+ * `ref` into `transaction`.
  *
  * The notes commit is authored by the committer ident, not by the
  * environment's author: the records are written by whoever makes the
@@ -200,7 +206,8 @@ static int queue_note(struct repository *r,
 
 	if (refs_read_ref(get_main_ref_store(r), ref, &old_oid))
 		oidcpy(&old_oid, null_oid(r->hash_algo));
-	if (odb_write_object(r->objects, record->buf, record->len,
+	if (record &&
+	    odb_write_object(r->objects, record->buf, record->len,
 			     OBJ_BLOB, &blob_oid)) {
 		strbuf_addf(err, _("unable to write the record for '%s'"), ref);
 		return -1;
@@ -212,7 +219,10 @@ static int queue_note(struct repository *r,
 	 * load.
 	 */
 	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
-	add_note(&t, commit, &blob_oid, NULL);
+	if (record)
+		add_note(&t, commit, &blob_oid, NULL);
+	else
+		remove_note(&t, commit->hash);
 	ret = write_notes_tree(&t, &tree_oid);
 	free_notes(&t);
 	if (ret) {
@@ -266,12 +276,26 @@ int provenance_queue_records(struct repository *r,
 	ret = queue_note(r, transaction, PROVENANCE_LINES_REF, commit,
 			 &buf, msg.buf, err);
 
+	strbuf_reset(&buf);
 	if (!ret && reasoning->sessions_nr) {
-		strbuf_reset(&buf);
 		oidcpy(&reasoning->commit, commit);
 		provenance_reasoning_format(reasoning, &buf);
 		ret = queue_note(r, transaction, PROVENANCE_REASONING_REF,
 				 commit, &buf, msg.buf, err);
+	} else if (!ret) {
+		/* the two records of a commit must agree */
+		switch (provenance_read_reasoning(r, commit, &buf)) {
+		case -1:
+			strbuf_addf(err, _("unable to read the reasoning record of %s"),
+				    oid_to_hex(commit));
+			ret = -1;
+			break;
+		case 1:
+			ret = queue_note(r, transaction,
+					 PROVENANCE_REASONING_REF, commit,
+					 NULL, msg.buf, err);
+			break;
+		}
 	}
 
 	strbuf_release(&buf);

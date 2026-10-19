@@ -1,9 +1,12 @@
 #ifndef PROVENANCE_PATCH_H
 #define PROVENANCE_PATCH_H
 
+#include "xdiff-interface.h"
+
 struct commit;
 struct diff_queue_struct;
 struct object_id;
+struct provenance_range;
 struct provenance_record;
 struct repository;
 struct strbuf;
@@ -56,5 +59,21 @@ int provenance_patch_parse(struct repository *r, const char *buf, size_t len,
  */
 int provenance_patch_locate(struct repository *r, struct commit *commit,
 			    struct provenance_record *rec);
+
+/*
+ * Locate the `nr` ranges at `ranges`, of one path whose content is
+ * `pre` before a change and `post` after it, as
+ * provenance_patch_locate() does: a `+` range among the runs of lines
+ * of `post` that are not in `pre`, a `-` range among the runs of lines
+ * of `pre` that are not in `post`, each as the window of as many lines
+ * whose anchor is that of the range, the closest to the line numbers of
+ * the range and not overlapping a range located before.  A range that
+ * is found is moved there, and `found[i]` says whether `ranges[i]` was.
+ * Returns 0 on success, or -1 if the contents cannot be compared.
+ */
+int provenance_patch_locate_ranges(struct repository *r,
+				   const mmfile_t *pre, const mmfile_t *post,
+				   struct provenance_range *ranges, size_t nr,
+				   char *found);
 
 #endif /* PROVENANCE_PATCH_H */

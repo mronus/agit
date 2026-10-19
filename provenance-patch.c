@@ -150,14 +150,30 @@ static void version_release(struct version *v)
 	free(v->taken);
 }
 
+/* Find the lines of the content of `v`. */
+static void split_lines(struct version *v)
+{
+	const char *p = v->content.ptr, *end = p + v->content.size;
+	size_t alloc = 0;
+
+	while (p < end) {
+		const char *eol = memchr(p, '\n', end - p);
+
+		ALLOC_GROW(v->start, v->nr + 1, alloc);
+		v->start[v->nr++] = p - v->content.ptr;
+		p = eol ? eol + 1 : end;
+	}
+	ALLOC_GROW(v->start, v->nr + 1, alloc);
+	v->start[v->nr] = v->content.size;
+	CALLOC_ARRAY(v->taken, v->nr);
+}
+
 /* Read `path` of `tree`: empty unless it is a regular file there. */
 static int read_version(struct repository *r, const struct object_id *tree,
 			const char *path, struct version *v)
 {
 	struct object_id oid;
 	unsigned short mode;
-	const char *p, *end;
-	size_t alloc = 0;
 
 	if (oideq(tree, r->hash_algo->empty_tree) ||
 	    get_tree_entry(r, tree, path, &oid, &mode) || !S_ISREG(mode)) {
@@ -176,19 +192,7 @@ static int read_version(struct repository *r, const struct object_id *tree,
 		v->content.ptr = data;
 		v->content.size = size;
 	}
-
-	p = v->content.ptr;
-	end = p + v->content.size;
-	while (p < end) {
-		const char *eol = memchr(p, '\n', end - p);
-
-		ALLOC_GROW(v->start, v->nr + 1, alloc);
-		v->start[v->nr++] = p - v->content.ptr;
-		p = eol ? eol + 1 : end;
-	}
-	ALLOC_GROW(v->start, v->nr + 1, alloc);
-	v->start[v->nr] = v->content.size;
-	CALLOC_ARRAY(v->taken, v->nr);
+	split_lines(v);
 	return 0;
 }
 
@@ -371,6 +375,30 @@ static int locate_file(struct repository *r, const struct object_id *pre,
 	}
 
 out:
+	version_release(&old);
+	version_release(&new);
+	return ret;
+}
+
+int provenance_patch_locate_ranges(struct repository *r,
+				   const mmfile_t *pre, const mmfile_t *post,
+				   struct provenance_range *ranges, size_t nr,
+				   char *found)
+{
+	struct version old = { 0 }, new = { 0 };
+	int ret = 0;
+
+	old.content.ptr = xmemdupz(pre->ptr, pre->size);
+	old.content.size = pre->size;
+	split_lines(&old);
+	new.content.ptr = xmemdupz(post->ptr, post->size);
+	new.content.size = post->size;
+	split_lines(&new);
+	if (find_runs(&old, &new))
+		ret = -1;
+	for (size_t i = 0; !ret && i < nr; i++)
+		found[i] = locate_range(r, ranges[i].side == '+' ? &new : &old,
+					&ranges[i]);
 	version_release(&old);
 	version_release(&new);
 	return ret;

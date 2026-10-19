@@ -82,8 +82,15 @@ COMMANDS
 `claim --session <id> (--patch <file> | [--] <path>...)`::
 	Declare that the session wrote the changes to the given paths, or
 	the changes in the given patch, for agents that could not stamp
-	their edits while making them.  A patch currently claims the
-	whole of each path that it names, not only its hunks.
+	their edits while making them.  A path claims every line that the
+	commit changes in it.  A patch claims the lines of its hunks
+	only: each run of lines that a hunk adds is looked for, by its
+	text, among the lines that the commit adds to the path, and each
+	run that it removes among the lines the commit removes, the
+	closest to where the hunk puts it, so that a hunk is found even
+	where later edits moved it.  A hunk that is not found, as when
+	its lines were rewritten before the commit, claims nothing, and a
+	warning names its path.
 
 `list [--session <id>]`::
 	Print the entries of the journal, one per line, in the order in

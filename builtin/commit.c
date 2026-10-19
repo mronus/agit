@@ -1701,15 +1701,25 @@ static int git_commit_config(const char *k, const char *v,
 	return git_status_config(k, v, ctx, s);
 }
 
+/* Whether `picks` names a commit that was reverted. */
+static int picks_revert(const struct provenance_picks *picks)
+{
+	for (size_t i = 0; i < picks->nr; i++)
+		if (picks->items[i].revert)
+			return 1;
+	return 0;
+}
+
 /*
  * The commits that the commit about to be made rewrites: the commit
  * being amended, and the commit being picked or reverted, as named by
  * the sequencer with --provenance-pick or --provenance-revert, or by
  * the cherry-pick or revert in progress, or else the "fixup" or
  * "squash" command that an interactive rebase stopped at because of
- * conflicts.  Unless the sequencer names them, or the commit is a
- * revert, the commits applied by "cherry-pick --no-commit" since the
- * last commit are picked, too.
+ * conflicts.  Unless the sequencer names them, the commits applied by
+ * "cherry-pick --no-commit" and undone by "revert --no-commit" since
+ * the last commit are picked or reverted, too; REVERT_HEAD, which
+ * names the last of those reverted, is then left alone.
  */
 static void determine_rewrite(struct commit *current_head,
 			      struct provenance_rewrite *rw)
@@ -1726,21 +1736,22 @@ static void determine_rewrite(struct commit *current_head,
 	} else if (whence == FROM_MERGE) {
 		return;
 	} else {
+		if (provenance_picks_read(the_repository, &rw->picks)) {
+			rollback_index_files();
+			die(_("unable to record provenance"));
+		}
 		if (!amend && (is_from_cherry_pick(whence) ||
 			       whence == FROM_REBASE_PICK)) {
 			name = "CHERRY_PICK_HEAD";
 		} else if (!amend &&
 			   refs_ref_exists(get_main_ref_store(the_repository),
 					   "REVERT_HEAD")) {
-			name = "REVERT_HEAD";
-			rw->revert = 1;
+			if (!picks_revert(&rw->picks)) {
+				name = "REVERT_HEAD";
+				rw->revert = 1;
+			}
 		} else {
 			rw->pick = rebase_stopped_fixup(the_repository);
-		}
-		if (!rw->revert &&
-		    provenance_picks_read(the_repository, &rw->picks)) {
-			rollback_index_files();
-			die(_("unable to record provenance"));
 		}
 	}
 
@@ -2055,7 +2066,7 @@ int cmd_commit(int argc,
 		determine_rewrite(current_head, &rw);
 		compute_provenance(parents, author_ident.buf, &rw,
 				   &prov_lines, &prov_reasoning);
-		oid_array_clear(&rw.picks);
+		provenance_picks_release(&rw.picks);
 	}
 
 	if (amend) {

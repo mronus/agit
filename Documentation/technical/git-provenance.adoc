@@ -615,17 +615,24 @@ left to commit and leaves the records alone.
 
 `cherry-pick --no-commit` makes no commit and writes no
 `CHERRY_PICK_HEAD`, so it lists the commits it applies in a `picks`
-file next to the journal (see the format document). The next `git
-commit` takes them as sources after the commit being amended and the
-one being picked, in the order they were applied, all found in the
-new commit, so that several `-n` picks followed by one commit carry
-the records of each. Every commit that empties the journal removes
-the file with it. As the user may have discarded a
-pick before committing, such a source is tentative: its reasoning is
-attached only if a line of the commit takes its owners from it, as
-for `adopt`. A revert takes no picks; `revert --no-commit` writes
-`REVERT_HEAD`, which names the last commit reverted only. `git merge
---squash`, which makes no commit either, appends the commits it
+file next to the journal (see the format document). `revert
+--no-commit` lists the commits it reverts in the same file, marked as
+reverts, as the `REVERT_HEAD` it writes names only the last of them.
+The next `git commit` takes the entries as sources after the commit
+being amended and the one being picked or reverted, in the order they
+were applied, each a pick or a revert as its entry says, all found in
+the new commit, so that several `-n` picks and reverts followed by one
+commit carry the records of each. Being a revert is a property of each
+source, so one commit may carry picks and reverts together; a revert
+source restores the lines that a blame of its parent finds, as above.
+`REVERT_HEAD` is a source only if the file names no revert, as after a
+`git revert` that stopped on a conflict, so that no reverted commit is
+a source twice. Every commit that empties the journal removes the
+file with it. As the user may have discarded a pick or a revert before
+committing, such a source is tentative: the reasoning of a pick is
+attached only if a line of the commit takes its owners from it, as for
+`adopt`, and a discarded revert restores no line of the commit. `git
+merge --squash`, which makes no commit either, appends the commits it
 squashes to the same file, oldest first, so that the commit that
 concludes it carries their records as after a `cherry-pick
 --no-commit` of each.

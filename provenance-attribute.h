@@ -58,21 +58,24 @@ struct provenance_source {
 	 * commit takes its owners from it.
 	 */
 	unsigned tentative : 1;
+	/*
+	 * The new commit undoes the changes of the commit.  The lines
+	 * that the commit deleted, which the new commit restores, are
+	 * owned as a blame of the commit's first parent finds them: by
+	 * the actors of the range that covers the line in the line record
+	 * of the commit that introduced it; such a line is UNKNOWN if
+	 * that commit has no line record or the range is UNKNOWN.  The
+	 * lines that the commit added, which the new commit deletes, are
+	 * attributed as its line record says.  Its reasoning record is
+	 * not carried over.
+	 */
+	unsigned revert : 1;
 };
 
 /*
  * Flags for provenance_attribute_rewrite().
  *
  * PROVENANCE_REWRITE_AMEND: `sources[0]` is the commit being amended.
- *
- * PROVENANCE_REWRITE_REVERT: there is one source, and the commit
- * undoes its changes.  The lines that the source deleted, which the
- * commit restores, are owned as a blame of the source's first parent
- * finds them: by the actors of the range that covers the line in the
- * line record of the commit that introduced it; such a line is UNKNOWN
- * if that commit has no line record or the range is UNKNOWN.  The lines
- * that the source added, which the commit deletes, are attributed as
- * its line record says.
  *
  * PROVENANCE_REWRITE_ADOPT: the commit was made without the extension
  * (see the "Re-anchoring" section of
@@ -81,9 +84,8 @@ struct provenance_source {
  * `capture` is `adopted`.  The sources are usually tentative.  The
  * journal must be empty.
  */
-#define PROVENANCE_REWRITE_AMEND  (1 << 0)
-#define PROVENANCE_REWRITE_REVERT (1 << 1)
-#define PROVENANCE_REWRITE_ADOPT  (1 << 2)
+#define PROVENANCE_REWRITE_AMEND (1 << 0)
+#define PROVENANCE_REWRITE_ADOPT (1 << 1)
 
 /*
  * As provenance_attribute(), for a commit that rewrites the `nr`
@@ -92,7 +94,7 @@ struct provenance_source {
  * Documentation/technical/git-provenance.adoc.
  *
  * The changes of each source are attributed as its line record says,
- * before the stamps in `journal`.  The lines that a source without a
+ * or undone if it is a revert, before the stamps in `journal`.  The lines that a source without a
  * line record changes, like those its record marks UNKNOWN, are of
  * unknown origin, and stay UNKNOWN however they are edited after.
  *
@@ -107,8 +109,8 @@ struct provenance_source {
  * come after all the sources.
  *
  * The reasoning record names the sessions of the reasoning records of
- * the sources, unless PROVENANCE_REWRITE_REVERT is set, followed by the
- * sessions the journal attaches to the commit.  The reasoning record of
+ * the sources that are not reverts, followed by the sessions the
+ * journal attaches to the commit.  The reasoning record of
  * a tentative source is left out if no line of the commit takes its
  * owners from that source.
  */

@@ -553,7 +553,7 @@ static void squash_message(struct commit *commit, struct commit_list *remotehead
 	 * --no-commit" of each.
 	 */
 	for (size_t i = picks.nr; provenance_enabled(the_repository) && i--; )
-		if (provenance_picks_append(the_repository, &picks.oid[i]))
+		if (provenance_picks_append(the_repository, &picks.oid[i], 0))
 			die(_("unable to record provenance"));
 
 	oid_array_clear(&picks);

@@ -2591,9 +2591,11 @@ static enum pick_result do_pick_commit(struct repository *r,
 			    REF_NO_DEREF, UPDATE_REFS_MSG_ON_ERR))
 		res = -1;
 	/* the commit made after --no-commit finds the picks in a file */
-	if (command == TODO_PICK && opts->no_commit &&
-	    (res == 0 || res == 1) && provenance_enabled(r) &&
-	    provenance_picks_append(r, &commit->object.oid))
+	if ((command == TODO_PICK || command == TODO_REVERT) &&
+	    opts->no_commit && (res == 0 || res == 1) &&
+	    provenance_enabled(r) &&
+	    provenance_picks_append(r, &commit->object.oid,
+				    command == TODO_REVERT))
 		res = -1;
 
 	if (res) {

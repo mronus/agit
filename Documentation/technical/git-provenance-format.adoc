@@ -278,10 +278,10 @@ followed by the session given with `--session` if it is not among them.
 `started` and `ended` are the times of the session's first `begin` and
 last `end` stamps.  The summary is the most recent `reason` summary of
 each of these sessions, in the same order, separated by blank lines.
-A commit that rewrites others, except a revert, first lists the
-sessions of their reasoning records, in order and each once, and
-their summaries come first; a session listed there is not listed
-again.  Transcripts are not stored by version 1.
+A commit that rewrites others first lists the sessions of the
+reasoning records of those it does not revert, in order and each
+once, and their summaries come first; a session listed there is not
+listed again.  Transcripts are not stored by version 1.
 
 The design calls for a reasoning record to be a tree, holding the
 summary together with per-session metadata and optional transcripts,
@@ -424,7 +424,9 @@ the repository.
 
 `claim <ts> <session> patch <patch-blob>`::
 	The session declares that it wrote the changes in the patch
-	stored in `<patch-blob>`.
+	stored in `<patch-blob>`, a unified diff whose paths carry the
+	`a/` and `b/` prefixes: the runs of lines that its hunks add or
+	remove, wherever the commit adds or removes them.
 
 A snapshot is the tree that "git add -A" followed by "git write-tree"
 would produce, written without touching the index.  When a stamp is
@@ -445,13 +447,23 @@ from those changes are `HUMAN` when they are committed later.  The
 commit skips entries whose objects are missing with a warning.
 
 Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
-that `git cherry-pick --no-commit` applied since the last commit, and
-those that `git merge --squash` squashed, so that the commit made
-afterwards carries over their records.  It is a text file with LF line
-endings and one full object id per line, in the order in which the
-commits were applied, oldest first for a squash; `cherry-pick` and
-`merge` append to it while holding `$GIT_DIR/provenance/journal.lock`,
-and only when provenance is enabled.  A reader ignores lines that do
-not parse, with a warning.  The commits that remove the journal remove
+that `git cherry-pick --no-commit` applied and `git revert
+--no-commit` reverted since the last commit, and those that `git merge
+--squash` squashed, so that the commit made afterwards carries over
+their records.  It is a text file with LF line endings and one entry
+per line, in the order in which the commits were applied, oldest first
+for a squash:
+
+----
+pick <object-id>
+revert <object-id>
+----
+
+`pick` names a commit that was applied, `revert` one that was
+reverted, each with its full object id; a line holding an object id
+alone is a `pick`.  `cherry-pick`, `revert` and `merge` append to it
+while holding `$GIT_DIR/provenance/journal.lock`, and only when
+provenance is enabled.  A reader ignores lines that do not parse, with
+a warning.  The commits that remove the journal remove
 this file with it, and only they: `git stamp` leaves it alone.  Like
 the journal, it is never transferred.

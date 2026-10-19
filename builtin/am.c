@@ -1775,7 +1775,7 @@ static void do_commit(const struct am_state *state)
 		die(_("failed to write commit object"));
 
 	if (record_provenance) {
-		struct provenance_rewrite rw = { .picks = OID_ARRAY_INIT };
+		struct provenance_rewrite rw = { 0 };
 		struct provenance_record mailed = PROVENANCE_RECORD_INIT;
 
 		if (state->rebasing) {
