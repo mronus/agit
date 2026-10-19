@@ -528,6 +528,15 @@ If they are rejected again because the remote moved, the push fails;
 `git fetch <name>` merges the provenance refs of the remote, after
 which the push can be retried.
 
+A provenance ref whose history was rewritten locally, as `git
+provenance purge` does (see linkgit:git-provenance[1]), is rejected
+again after the merge, which keeps the rewrite.  The push then fails
+with a hint to replace the ref on the remote with `git push --force
+<name> <ref>`, as in `git push --force origin
+refs/provenance/reasoning`, which also updates its tracking ref.
+Another clone takes the rewrite with its next fetch (see
+linkgit:git-fetch[1]).
+
 If the remote refuses a provenance ref for another reason, as a
 `pre-receive` or `update` hook that does not accept them does, and
 every other ref was pushed, the push succeeds: the refused refs are

@@ -703,4 +703,115 @@ test_expect_success 'remote prune leaves the tracking refs of an opted-out remot
 	git -C prune3 rev-parse --verify refs/provenance/remotes/origin/reasoning
 '
 
+
+# Rewrite the history of refs/provenance/lines in <repo> as "git
+# provenance purge" does for the reasoning ref: replace it with one
+# commit without a parent whose tree is that of the ref without the
+# record of <commit>.
+#
+# Usage: rewrite_without <repo> <commit>
+rewrite_without () {
+	git -C "$1" update-ref refs/notes/scratch refs/provenance/lines &&
+	git -C "$1" notes --ref=scratch remove "$2" &&
+	tree=$(git -C "$1" rev-parse refs/notes/scratch^{tree}) &&
+	git -C "$1" update-ref -d refs/notes/scratch &&
+	tip=$(git -C "$1" commit-tree -m rewrite $tree) &&
+	git -C "$1" update-ref refs/provenance/lines $tip
+}
+
+test_expect_success 'setup a rewritten provenance ref' '
+	git init --bare -b main rw.git &&
+	git clone rw.git rw-a &&
+	git -C rw-a config set core.logAllRefUpdates always &&
+	commit_in rw-a dropped &&
+	commit_in rw-a kept &&
+	git -C rw-a push origin main &&
+	git clone rw.git rw-b &&
+	git -C rw-b config set core.logAllRefUpdates always &&
+	git clone rw.git rw-c &&
+	rewrite_without rw-a main~1 &&
+	git -C rw-a rev-parse refs/provenance/lines >rewritten
+'
+
+test_expect_success 'fetch after a local rewrite takes only the new records' '
+	commit_in rw-b from-b &&
+	git -C rw-b push origin main &&
+	git -C rw-a pull 2>err &&
+	test_grep ! "shares no history" err &&
+	echo "$(git -C rw-a rev-parse refs/provenance/lines) $(cat rewritten)" >expect &&
+	git -C rw-a rev-list --parents -1 refs/provenance/lines >actual &&
+	test_cmp expect actual &&
+	test_must_fail git -C rw-a provenance show main~2 &&
+	git -C rw-a provenance show main~1 &&
+	git -C rw-b provenance show main >expect &&
+	git -C rw-a provenance show main >actual &&
+	test_cmp expect actual &&
+	echo "fetch: merge provenance from origin (rewritten locally)" >expect &&
+	git -C rw-a reflog show --format=%gs -1 refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'push after a local rewrite fails with a hint' '
+	git -C rw-a rev-parse refs/provenance/lines >expect &&
+	test_must_fail git -C rw-a push 2>err &&
+	test_grep "Merging the provenance refs of .origin. and pushing them again" err &&
+	test_grep "hint: The history of .refs/provenance/lines. was rewritten locally,$" err &&
+	test_grep "hint: with it, use .git push --force origin refs/provenance/lines.." err &&
+	test_grep ! "git fetch origin. before pushing" err &&
+	git -C rw-a rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual &&
+	test_must_fail git -C rw-a -c advice.pushUpdateRejected=false push 2>err &&
+	test_grep ! "^hint:" err
+'
+
+test_expect_success 'push --force of the rewritten ref updates the tracking ref' '
+	git -C rw-a push --force origin refs/provenance/lines &&
+	git -C rw-a rev-parse refs/provenance/lines >expect &&
+	git -C rw.git rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual &&
+	git -C rw-a rev-parse refs/provenance/remotes/origin/lines >actual &&
+	test_cmp expect actual &&
+	git -C rw-a fetch -v 2>err &&
+	test_grep ! "^fast-forwarded\|^merged\|^created\|^reset" err
+'
+
+test_expect_success 'fetch after a remote rewrite keeps the local records' '
+	commit_in rw-b local-b &&
+	git -C rw-b fetch 2>err &&
+	test_grep ! "shares no history" err &&
+	echo "$(git -C rw-b rev-parse refs/provenance/lines) $(git -C rw.git rev-parse refs/provenance/lines)" >expect &&
+	git -C rw-b rev-list --parents -1 refs/provenance/lines >actual &&
+	test_cmp expect actual &&
+	test_must_fail git -C rw-b provenance show main~3 &&
+	git -C rw-b provenance show main~2 &&
+	git -C rw-b provenance show main~1 &&
+	git -C rw-b provenance show main &&
+	echo "fetch: merge provenance from origin (rewritten on origin)" >expect &&
+	git -C rw-b reflog show --format=%gs -1 refs/provenance/lines >actual &&
+	test_cmp expect actual &&
+	git -C rw-b push origin main 2>err &&
+	test_grep ! "forced update\|Merging the provenance" err &&
+	git -C rw-b rev-parse refs/provenance/lines >expect &&
+	git -C rw.git rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'fetch after a remote rewrite takes it if nothing was added' '
+	git -C rw-c fetch -v 2>err &&
+	test_grep "reset .refs/provenance/lines. to the rewritten" err &&
+	git -C rw.git rev-parse refs/provenance/lines >expect &&
+	git -C rw-c rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'unrelated histories without a common tracking state are a union' '
+	git init -b main unrelated &&
+	commit_in unrelated alone &&
+	git -C unrelated remote add origin ../rw.git &&
+	git -C unrelated fetch 2>err &&
+	test_grep "shares no history with the local one" err &&
+	git -C unrelated provenance show main &&
+	git -C unrelated provenance show origin/main
+'
+
 test_done

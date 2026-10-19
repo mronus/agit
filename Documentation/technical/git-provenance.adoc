@@ -778,9 +778,25 @@ into the local ref, through a ref transaction:
 3. A record that both sides changed differently keeps the local
    version, with a warning naming the commit. Records are not
    concatenated, as the `cat_sort_uniq` strategy of `notes-merge.c`
-   would do, because the result would not parse. If the two sides
-   share no history, as in a shallow clone, the merge is a union with
-   the same rule.
+   would do, because the result would not parse.
+
+4. If the two sides share no history, one of them may have rewritten
+   it, as `provenance purge` does. The value T that the tracking ref
+   had before the fetch is the last state both sides agreed on (for
+   the retry of a push, the value before the retry's fetch). If T is
+   in the history of the fetched commit only, the local history was
+   rewritten: the tree is a three-way merge against T, and the commit
+   has the local commit as its only parent, so the purged records do
+   not come back and those the remote added since T do. If T is in
+   the history of the local ref only, the remote history was
+   rewritten: the same merge has the fetched commit as its only
+   parent, or the local ref takes the fetched commit if it is still
+   at T, so the local records added since T are kept and the result
+   fast-forwards the remote without bringing the old history back.
+   Otherwise, as in a shallow clone or with no tracking ref yet, the
+   merge is a union with the rule of 3. The reflog message names the
+   case: `fetch: merge provenance from <name> (rewritten locally)`,
+   or `(rewritten on <name>)`.
 
 The merge is written on top of `notes.c` in `provenance-transfer.c`
 rather than through `notes_merge()`, whose `ours` strategy resolves
@@ -799,7 +815,11 @@ with `--force`. If the remote rejects a provenance ref because it
 moved, `push` runs `git fetch` for the rejected refs, which merges
 them as above, and pushes the provenance refs once more; if that is
 rejected too because the remote moved again, the push fails with a
-hint to run `git fetch <name>`.
+hint to run `git fetch <name>`. After a local rewrite the second push
+is rejected as well, as the merge keeps the rewrite; when the tracking
+ref is not in the history of the local ref, the hint says that the
+history was rewritten locally and names `git push --force <name>
+<ref>` instead. Both hints are gated by `advice.pushUpdateRejected`.
 
 A provenance ref that the push updated on the remote, whether added
 on its own or named in the refspecs, sets its tracking ref
