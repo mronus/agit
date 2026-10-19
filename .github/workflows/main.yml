@@ -420,6 +420,9 @@ jobs:
         - jobname: linux-leaks
           image: ubuntu:rolling
           cc: gcc
+        - jobname: linux-provenance
+          image: ubuntu:rolling
+          cc: gcc
         - jobname: linux-reftable-leaks
           image: ubuntu:rolling
           cc: gcc
