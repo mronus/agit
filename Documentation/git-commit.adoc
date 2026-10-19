@@ -616,7 +616,7 @@ The advice given for a commit made without `--session` (see
 `advice.provenanceSession` in linkgit:git-config[1]) and the refusal
 of `provenance.require` do not apply to a commit whose line record has
 no range at all, such as an empty commit or a merge that resolved
-nothing.
+nothing.  `--quiet` suppresses the advice, but not the refusal.
 
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------
