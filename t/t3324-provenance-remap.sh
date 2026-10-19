@@ -31,10 +31,8 @@ import () {
 	git init -q "$1" &&
 	git -C "$1" config core.logAllRefUpdates always &&
 	git -C "$1" fast-import --quiet --export-marks="$PWD/$1.marks" <"$2" &&
-	sort old.marks >old.sorted &&
-	sort "$1.marks" >new.sorted &&
-	join old.sorted new.sorted >joined.out &&
-	cut -d" " -f2,3 joined.out >"$1.map"
+	awk 'NR == FNR { old[$1] = $2; next } $1 in old { print old[$1], $2 }' \
+		old.marks "$1.marks" >"$1.map"
 }
 
 # Print the records of <rev> in <repo> without their "commit" lines;
