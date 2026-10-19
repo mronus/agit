@@ -179,7 +179,8 @@ out:
 
 /*
  * Write `record` as the note for `commit` under the notes ref `ref`,
- * and queue the update of `ref` into `transaction`.
+ * or remove the note if `record` is NULL, and queue the update of
+ * `ref` into `transaction`.
  *
  * The notes commit is authored by the committer ident, not by the
  * environment's author: the records are written by whoever makes the
@@ -200,7 +201,8 @@ static int queue_note(struct repository *r,
 
 	if (refs_read_ref(get_main_ref_store(r), ref, &old_oid))
 		oidcpy(&old_oid, null_oid(r->hash_algo));
-	if (odb_write_object(r->objects, record->buf, record->len,
+	if (record &&
+	    odb_write_object(r->objects, record->buf, record->len,
 			     OBJ_BLOB, &blob_oid)) {
 		strbuf_addf(err, _("unable to write the record for '%s'"), ref);
 		return -1;
@@ -212,7 +214,10 @@ static int queue_note(struct repository *r,
 	 * load.
 	 */
 	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
-	add_note(&t, commit, &blob_oid, NULL);
+	if (record)
+		add_note(&t, commit, &blob_oid, NULL);
+	else
+		remove_note(&t, commit->hash);
 	ret = write_notes_tree(&t, &tree_oid);
 	free_notes(&t);
 	if (ret) {
@@ -266,12 +271,26 @@ int provenance_queue_records(struct repository *r,
 	ret = queue_note(r, transaction, PROVENANCE_LINES_REF, commit,
 			 &buf, msg.buf, err);
 
+	strbuf_reset(&buf);
 	if (!ret && reasoning->sessions_nr) {
-		strbuf_reset(&buf);
 		oidcpy(&reasoning->commit, commit);
 		provenance_reasoning_format(reasoning, &buf);
 		ret = queue_note(r, transaction, PROVENANCE_REASONING_REF,
 				 commit, &buf, msg.buf, err);
+	} else if (!ret) {
+		/* the two records of a commit must agree */
+		switch (provenance_read_reasoning(r, commit, &buf)) {
+		case -1:
+			strbuf_addf(err, _("unable to read the reasoning record of %s"),
+				    oid_to_hex(commit));
+			ret = -1;
+			break;
+		case 1:
+			ret = queue_note(r, transaction,
+					 PROVENANCE_REASONING_REF, commit,
+					 NULL, msg.buf, err);
+			break;
+		}
 	}
 
 	strbuf_release(&buf);

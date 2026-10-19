@@ -82,8 +82,9 @@ int provenance_commit_records(struct repository *r,
  * Write `lines` and `reasoning` as the records of `commit`, filling in
  * their commit ids, and queue the updates of the provenance refs into
  * `transaction`, with the reflog message `reflog_msg`.  The reasoning
- * record is only written if it names a session.  Returns 0 on success,
- * or -1 with a message in `err`.
+ * record is only written if it names a session; if it names none, a
+ * reasoning record that `commit` has already is removed.  Returns 0 on
+ * success, or -1 with a message in `err`.
  */
 int provenance_queue_records(struct repository *r,
 			     struct ref_transaction *transaction,

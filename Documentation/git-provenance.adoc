@@ -150,8 +150,9 @@ OPTIONS
 `-f`::
 `--force`::
 	With `adopt`, replace the records of commits whose line record
-	was adopted.  Records that were observed or declared are never
-	replaced.
+	was adopted.  Both records are replaced: a commit adopted again
+	from sources that name no session keeps no reasoning record.
+	Records that were observed or declared are never replaced.
 
 `-n`::
 `--dry-run`::

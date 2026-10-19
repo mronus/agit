@@ -318,4 +318,22 @@ test_expect_success 'unusable records are skipped with a warning' '
 	adopted_records f1 HEAD
 '
 
+test_expect_success '--force replaces the reasoning record, too' '
+	git checkout -b human-f1 base &&
+	test_write_lines 1 2 three 4 5 6 7 8 9 10 11 >file &&
+	test_tick &&
+	git commit -a -m human-f1 &&
+	test_must_fail git provenance show --reasoning human-f1 &&
+	git checkout -b reasoned moved &&
+	stock cherry-pick f1 &&
+	git provenance adopt --from feature HEAD >actual &&
+	echo "$(git rev-parse HEAD) adopted" >adopted.expect &&
+	test_cmp adopted.expect actual &&
+	adopted_records f1 HEAD &&
+	git provenance adopt --force --from human-f1 HEAD >actual &&
+	test_cmp adopted.expect actual &&
+	adopted_records human-f1 HEAD &&
+	git provenance verify HEAD
+'
+
 test_done
