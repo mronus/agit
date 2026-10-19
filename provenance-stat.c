@@ -251,7 +251,7 @@ static void cache_write(struct repository *r, struct stat_cache *cache)
 	for (size_t i = 0; i < cache->added_nr; i++) {
 		const struct cache_entry *e = cache->added[i];
 
-		strbuf_addstr(&buf, oid_to_hex(&e->entry.oid));
+		strbuf_add_oid_hex(&buf, &e->entry.oid);
 		for (size_t m = 0; m < ARRAY_SIZE(e->lines.added); m++)
 			strbuf_addf(&buf, " %"PRIuMAX, e->lines.added[m]);
 		for (size_t m = 0; m < ARRAY_SIZE(e->lines.removed); m++)
