@@ -162,6 +162,17 @@ linux-provenance)
 	t7704.2 t7704.12 t7704.14 t7704.15
 	t7705.3
 	t7900.19 t7900.31 t7900.52
+	# The Provenance: block of format-patch, in mails compared
+	# with what stock Git writes.
+	t4013.139 t4013.140 t4013.141 t4013.142 t4013.143 t4013.144
+	t4013.145 t4013.146 t4013.147 t4013.148 t4013.149 t4013.150
+	t4013.151 t4013.152 t4013.154 t4013.155
+	t4014.74
+	t9001.38 # a line number in the mail
+	# The tests that use the patch t9001.38 writes, or the hook
+	# that those set up.
+	t9001.42 t9001.44 t9001.46 t9001.47 t9001.48 t9001.49 t9001.50
+	t9001.51 t9001.52 t9001.53
 	# Objects are deleted or packs crafted by hand, leaving the
 	# provenance refs pointing to objects that are gone.
 	t0410.11 t0410.13 t0410.14 t0410.15 t0410.27 t0410.40

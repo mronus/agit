@@ -942,11 +942,13 @@ stores are skipped in that job through `GIT_SKIP_TESTS`: those that
 see the `advice.provenanceSession` hint on stderr, list refs and see
 the provenance refs, walk all refs and see the provenance notes
 commits, count objects, packs or commits and count the records too,
-or delete objects that the provenance refs point to. The list and the
-reason for each entry are in `ci/run-build-and-tests.sh`; the upstream
-test scripts are not changed. A failure for any other reason is a bug
+delete objects that the provenance refs point to, or compare the mails
+of `format-patch` with what stock Git writes and see the
+`Provenance:` block. The list and the reason for each entry are in
+`ci/run-build-and-tests.sh`; the upstream test scripts are not
+changed. A failure for any other reason is a bug
 in the extension and is fixed, with a test in the provenance scripts
-(t3312 to t3318), which run in both kinds of jobs.
+(t3312 to t3319), which run in both kinds of jobs.
 
 Integrity
 ---------
@@ -1099,7 +1101,7 @@ Each step is implemented and reviewed on its own:
    pushes that hooks reject (done);
    (c) a CI job running the upstream suite with provenance enabled,
    and the fixes it needs (done);
-   (d) `format-patch`/`am` and `fast-export`/`fast-import`;
+   (d) `format-patch`/`am` and `fast-export`/`fast-import` (done);
    (e) `purge`, and the merge on fetch after a rewrite (done);
    (f) the query cache and repository-wide queries;
    (g) a CI bot.
