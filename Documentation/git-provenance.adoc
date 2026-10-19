@@ -16,7 +16,7 @@ git provenance purge [--dry-run] <revision-range>...
 git provenance purge [--dry-run] --session <id>... [<revision-range>...]
 git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
 		     [<revision-range>...]
-git provenance stat [--porcelain] [<revision-range>...]
+git provenance stat [--porcelain] [--no-cache] [<revision-range>...]
 
 DESCRIPTION
 -----------
@@ -137,7 +137,7 @@ without fetching first brings the purged records back, as it would
 for any rewritten history; so does a copy made by other means, such
 as a mail or a backup.
 
-`stat [--porcelain] [<revision-range>...]`::
+`stat [--porcelain] [--no-cache] [<revision-range>...]`::
 	Sum the line records of the commits in _<revision-range>_ and
 	print how many lines they add and remove, by mark, and the share
 	of the added lines that are `AI` or `MIXED`.  The commits are
@@ -161,6 +161,17 @@ added     15  AI 3 (20%)  MIXED 1 (7%)   HUMAN 8 (53%)  UNKNOWN 3 (20%)
 removed    6  AI 1 (17%)  MIXED 1 (17%)  HUMAN 2 (33%)  UNKNOWN 2 (33%)
 share    27%
 ------------
++
+The number of lines of each record is kept in
+`$GIT_DIR/objects/info/provenance-stat`, a cache in the object
+directory that the worktrees of the repository share, so that later
+runs do not read and parse the record again.  Its entries are keyed
+by the blob of the record, so a record that is replaced is read anew.
+A cache that cannot be parsed is ignored and written anew, and one
+that cannot be written only gives a warning.  The cache is never
+transferred.  To rebuild it, delete the file; the next `stat` writes
+it again.  See
+`Documentation/technical/git-provenance-format.adoc` for its format.
 
 OPTIONS
 -------
@@ -187,6 +198,10 @@ OPTIONS
 	`added.human`, `added.unknown`, `removed`, `removed.ai`,
 	`removed.mixed`, `removed.human`, `removed.unknown` and `share`,
 	in this order, and the share is a number without a `%` sign.
+
+`--no-cache`::
+	With `stat`, read every record, without using or writing the
+	cache of the numbers of lines of the records.
 
 `-n`::
 `--dry-run`::

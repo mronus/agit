@@ -36,11 +36,18 @@ uintmax_t provenance_stat_share(const struct provenance_stat *stat);
  * Walk the commits of `revs`, which must have been set up but not
  * prepared, and set `stat` to the sum of their line records in `r`.
  * A record that cannot be read or parsed is skipped, with a warning,
- * and its commit does not count as recorded.  Returns 0 on success,
- * and -1, after reporting an error, if refs/provenance/lines cannot
- * be read or the walk cannot be set up.
+ * and its commit does not count as recorded.
+ *
+ * If `use_cache` is set, the lines of each record are taken from the
+ * cache $GIT_DIR/objects/info/provenance-stat where it has them, and
+ * those of the records that it does not have are added to it at the
+ * end of the walk.  A cache that does not parse is ignored and written
+ * anew, and one that cannot be read or written only gives a warning.
+ *
+ * Returns 0 on success, and -1, after reporting an error, if
+ * refs/provenance/lines cannot be read or the walk cannot be set up.
  */
 int provenance_stat_walk(struct repository *r, struct rev_info *revs,
-			 struct provenance_stat *stat);
+			 int use_cache, struct provenance_stat *stat);
 
 #endif /* PROVENANCE_STAT_H */

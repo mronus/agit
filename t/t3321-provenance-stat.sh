@@ -215,4 +215,110 @@ test_expect_success 'stat fails if the record ref is not a tree' '
 	test_grep "does not point to a tree" err
 '
 
+cache=.git/objects/info/provenance-stat
+
+# Print the object id of the line record of <rev>; there are too few
+# records for the notes tree to fan out.
+#
+# Usage: record_blob <rev>
+record_blob () {
+	git rev-parse "refs/provenance/lines:$(git rev-parse "$1")"
+}
+
+test_expect_success 'stat writes a cache entry per record' '
+	rm -f $cache &&
+	git provenance stat --porcelain >actual &&
+	cat >expect <<-EOF &&
+	version 1
+	$(record_blob c4) 0 0 1 2 0 1 0 2
+	$(record_blob c2) 3 1 3 0 1 0 2 0
+	$(record_blob c1) 0 0 4 1 0 0 0 0
+	EOF
+	test_cmp expect $cache &&
+	git provenance stat --porcelain --no-cache >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'a second stat adds nothing to the cache' '
+	cp $cache expect &&
+	git provenance stat >actual &&
+	test_cmp expect $cache
+'
+
+test_expect_success 'stat takes the lines of a record from the cache' '
+	test_when_finished "rm -f $cache" &&
+	blob=$(record_blob c4) &&
+	sed -e "s/^$blob .*/$blob 9 0 1 2 0 1 0 2/" $cache >cache.out &&
+	mv cache.out $cache &&
+	git provenance stat --porcelain >actual &&
+	test_grep "^added.ai 12$" actual &&
+	git provenance stat --porcelain --no-cache >actual &&
+	test_grep "^added.ai 3$" actual
+'
+
+test_expect_success 'stat --no-cache writes no cache' '
+	rm -f $cache &&
+	git provenance stat --no-cache >actual &&
+	test_path_is_missing $cache
+'
+
+test_expect_success 'a malformed cache is ignored and written anew' '
+	git provenance stat --porcelain --no-cache >expect &&
+	cp expect expect.porcelain &&
+	git provenance stat >/dev/null &&
+	cp $cache expect.cache &&
+	echo "version 2" >$cache &&
+	git provenance stat --porcelain >actual 2>err &&
+	test_grep "ignoring malformed provenance stat cache" err &&
+	test_cmp expect.porcelain actual &&
+	test_cmp expect.cache $cache &&
+	echo nonsense >>$cache &&
+	git provenance stat --porcelain >actual 2>err &&
+	test_grep "ignoring malformed provenance stat cache" err &&
+	test_cmp expect.porcelain actual &&
+	test_cmp expect.cache $cache &&
+	head -n 2 expect.cache >$cache &&
+	printf "%s 1 2 3" "$(record_blob c1)" >>$cache &&
+	git provenance stat --porcelain >actual 2>err &&
+	test_grep "ignoring malformed provenance stat cache" err &&
+	test_cmp expect.porcelain actual
+'
+
+test_expect_success 'a replaced record is counted from its new blob' '
+	test_when_finished "cp record.c4 record.out && add_record lines c4 record.out" &&
+	rm -f $cache &&
+	git provenance stat >/dev/null &&
+	git provenance show c4 >record.c4 &&
+	attach_record c4 "file d" "+ 1-3 AI s9 $ZERO_OID" &&
+	git provenance stat --porcelain >actual &&
+	test_grep "^added.ai 6$" actual &&
+	test_grep "^added.unknown 1$" actual &&
+	test_line_count = 5 $cache &&
+	tail -n 1 $cache >actual &&
+	echo "$(record_blob c4) 3 0 0 0 0 0 0 0" >expect &&
+	test_cmp expect actual
+'
+
+test_expect_success 'worktrees share the cache' '
+	test_when_finished "git worktree remove --force wt" &&
+	git worktree add --detach wt c4 &&
+	rm -f $cache &&
+	git -C wt provenance stat >/dev/null &&
+	test_line_count = 4 $cache &&
+	cp $cache expect &&
+	git provenance stat >/dev/null &&
+	test_cmp expect $cache
+'
+
+test_expect_success 'stat prints its answer if the cache cannot be written' '
+	test_when_finished "rm -f $cache.lock" &&
+	rm -f $cache &&
+	git provenance stat --porcelain --no-cache >expect &&
+	>$cache.lock &&
+	git provenance stat --porcelain >actual 2>err &&
+	test_grep "unable to lock" err &&
+	test_cmp expect actual &&
+	test_path_is_missing $cache
+'
+
 test_done

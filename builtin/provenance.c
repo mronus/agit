@@ -41,7 +41,7 @@
 	   "                     [<revision-range>...]")
 
 #define PROVENANCE_STAT_USAGE \
-	N_("git provenance stat [--porcelain] [<revision-range>...]")
+	N_("git provenance stat [--porcelain] [--no-cache] [<revision-range>...]")
 
 static struct commit *lookup_commit_arg(struct repository *repo,
 					const char *arg)
@@ -428,10 +428,12 @@ static int cmd_provenance_stat(int argc, const char **argv, const char *prefix,
 		PROVENANCE_STAT_USAGE,
 		NULL,
 	};
-	int porcelain = 0;
+	int porcelain = 0, use_cache = 1;
 	struct option options[] = {
 		OPT_BOOL(0, "porcelain", &porcelain,
 			 N_("print one 'key value' line per count")),
+		OPT_BOOL(0, "cache", &use_cache,
+			 N_("use the cache of the line record totals")),
 		OPT_END(),
 	};
 	struct setup_revision_opt opt = { .def = "HEAD" };
@@ -450,7 +452,7 @@ static int cmd_provenance_stat(int argc, const char **argv, const char *prefix,
 	if (revs.prune_data.nr)
 		die(_("pathspec arguments not supported"));
 
-	if (provenance_stat_walk(repo, &revs, &stat))
+	if (provenance_stat_walk(repo, &revs, use_cache, &stat))
 		ret = 1;
 	else if (porcelain)
 		print_stat_porcelain(&stat);

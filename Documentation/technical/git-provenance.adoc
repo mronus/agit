@@ -1050,8 +1050,16 @@ Performance
   are computed once per diff, then each shown path costs one
   attribution walk.
 
-- Repository-wide queries (AI share over time) can use an optional,
-  rebuildable local cache in the spirit of the commit-graph.
+- `provenance stat`: one notes tree load per run, then one lookup per
+  commit walked. Reading and parsing the records is the expensive
+  part, so the number of lines of each record, by side and mark, is
+  kept in `objects/info/provenance-stat`, a local file next to the
+  commit-graph, and only the records it lacks are read. Its entries
+  are keyed by the blob of the record rather than by the commit, so a
+  replaced record never meets a stale entry and nothing needs
+  invalidating. It is shared by worktrees, never transferred, written
+  under a lock at the end of a run, and rebuilt by deleting it; a
+  failure to write it is a warning.
 
 - Size: line records are a few hundred bytes per commit. Transcripts
   dominate, which is why they are optional, separate and lazily
@@ -1135,9 +1143,6 @@ Future Work
 
 - Adopting the commits that `fetch` brings in, through a hook or an
   opt-in configuration.
-
-- A query cache for repository-wide questions, such as the share of
-  AI-written lines over a range of history.
 
 - The share of AI-written lines in the current tree, which is a blame
   of every file rather than a sum of records.
