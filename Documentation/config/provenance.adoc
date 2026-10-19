@@ -8,7 +8,8 @@ provenance.enabled::
 	`git commit --amend`, linkgit:git-cherry-pick[1],
 	linkgit:git-revert[1] and linkgit:git-rebase[1] carry the
 	records of the commits they rewrite over to the commits they
-	make.  If false, none of these commands records provenance or
+	make, and linkgit:git-am[1] the line records that patches
+	carry.  If false, none of these commands records provenance or
 	reads the journal of stamps, and linkgit:git-fetch[1],
 	linkgit:git-push[1] and linkgit:git-clone[1] do not transfer
 	the provenance refs.  Transfer can be turned off for a single

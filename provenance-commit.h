@@ -35,6 +35,16 @@ struct provenance_rewrite {
 	 * not with `revert`.
 	 */
 	struct oid_array picks;
+	/*
+	 * The commit being made, if "git am" made it from a patch mail,
+	 * or NULL; not with the others.  Its changes are owned as
+	 * `mail_lines` says, the line record that the mail carried,
+	 * located in the commit (see provenance_patch_locate()), or, if it
+	 * is NULL, are of unknown origin, as those of a commit without a
+	 * line record.
+	 */
+	struct commit *mail;
+	const struct provenance_record *mail_lines;
 };
 
 /*
@@ -49,7 +59,9 @@ struct provenance_rewrite {
  * that order, each named once (see provenance_attribute_rewrite()).
  * The `picks` are tentative sources, as they may name commits whose
  * changes were discarded before the commit was made.  A pick that is
- * not a commit is ignored with a warning.
+ * not a commit is ignored with a warning.  With `mail`, the commit is
+ * its own source, with the line record `mail_lines` and no reasoning
+ * record.
  *
  * The records are stored in `lines` and `reasoning` as by
  * provenance_attribute().  The lines that the commit takes from a

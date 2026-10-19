@@ -102,6 +102,10 @@ int provenance_commit_records(struct repository *r,
 
 	if (rw && rw->revert && (rw->amend || !rw->pick || rw->picks.nr))
 		BUG("provenance: a revert must have a pick and no amend");
+	if (rw && rw->mail && (rw->amend || rw->pick || rw->picks.nr))
+		BUG("provenance: a mail must be the only source");
+	if (rw && rw->mail)
+		add_source(&sources, &nr, &alloc, rw->mail, 0);
 	if (rw && rw->amend)
 		add_source(&sources, &nr, &alloc, rw->amend, 0);
 	if (rw && rw->pick)
@@ -125,9 +129,15 @@ int provenance_commit_records(struct repository *r,
 			PROVENANCE_REASONING_INIT;
 	for (size_t i = 0; i < nr; i++) {
 		int has_reasoning;
-		int has_lines = read_source(r, sources[i].commit, &records[i],
-					    &reasonings[i], &has_reasoning);
+		int has_lines;
 
+		if (rw && rw->mail) {
+			/* the records of the mail, not those attached */
+			sources[i].lines = rw->mail_lines;
+			continue;
+		}
+		has_lines = read_source(r, sources[i].commit, &records[i],
+					&reasonings[i], &has_reasoning);
 		if (has_lines < 0) {
 			ret = -1;
 			goto out;

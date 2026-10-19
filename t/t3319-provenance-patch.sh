@@ -60,16 +60,16 @@ test_expect_success 'setup' '
 	EOF
 	git version >version.out &&
 	git_version=$(sed -n -e "s/^git version //p" version.out) &&
-	test_write_lines 1 2 3 4 5 6 7 8 9 10 >file &&
+	test_write_lines a b c d e 1 2 3 4 5 6 7 8 9 10 >file &&
 	git add file &&
 	test_tick &&
 	git commit -m base &&
 	git tag base &&
 
 	git stamp begin --session s1 --model m1 --tool t1 &&
-	test_write_lines 1 2 three 4 5 6 7 8 9 10 11 >file &&
+	test_write_lines a b c d e 1 2 three 4 5 6 7 8 9 10 11 >file &&
 	git stamp end --session s1 &&
-	test_write_lines 1 2 three 4 5 6 seven 8 9 10 11 >file &&
+	test_write_lines a b c d e 1 2 three 4 5 6 seven 8 9 10 11 >file &&
 	test_tick &&
 	git commit -a -m ai &&
 	git tag ai &&
@@ -78,15 +78,15 @@ test_expect_success 'setup' '
 		echo "$s1_actor" &&
 		echo "$human_actor" &&
 		echo "file file" &&
-		echo "+ 3 AI s1 $(anchor ai file 3)" &&
-		echo "+ 7 HUMAN human $(anchor ai file 7)" &&
-		echo "+ 11 AI s1 $(anchor ai file 11)" &&
-		echo "- 3 AI s1 $(anchor base file 3)" &&
-		echo "- 7 HUMAN human $(anchor base file 7)"
+		echo "+ 8 AI s1 $(anchor ai file 8)" &&
+		echo "+ 12 HUMAN human $(anchor ai file 12)" &&
+		echo "+ 16 AI s1 $(anchor ai file 16)" &&
+		echo "- 8 AI s1 $(anchor base file 8)" &&
+		echo "- 12 HUMAN human $(anchor base file 12)"
 	} >expect &&
 	check_lines ai &&
 
-	test_write_lines 1 2 three 4 5 6 seven 8 9 10 11 12 >file &&
+	test_write_lines a b c d e 1 2 three 4 5 6 seven 8 9 10 11 12 >file &&
 	test_tick &&
 	git -c provenance.enabled=false commit -a -m stock &&
 	git tag stock &&
@@ -221,6 +221,143 @@ test_expect_success 'git am and git apply take a mail with the block' '
 	git apply --index ai.mbox &&
 	git diff --cached --exit-code ai &&
 	git reset --hard
+'
+
+test_expect_success 'am records the mailed record for the commit it makes' '
+	git checkout --detach base &&
+	test_tick &&
+	git -c provenance.require=true am ai.mbox 2>err &&
+	test_grep ! "session" err &&
+	git provenance show ai >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am locates the ranges of a patch applied with an offset' '
+	git checkout -b shifted base &&
+	test_write_lines a 0 b c d e 1 2 3 4 5 6 7 8 9 10 >file &&
+	test_tick &&
+	git commit -a -m shift &&
+	git tag shift &&
+	test_tick &&
+	git am ai.mbox &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "$human_actor" &&
+		echo "file file" &&
+		echo "+ 9 AI s1 $(anchor HEAD file 9)" &&
+		echo "+ 13 HUMAN human $(anchor HEAD file 13)" &&
+		echo "+ 17 AI s1 $(anchor HEAD file 17)" &&
+		echo "- 9 AI s1 $(anchor shift file 9)" &&
+		echo "- 13 HUMAN human $(anchor shift file 13)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am -3 keeps the block across a conflict resolved by hand' '
+	git checkout -b resolved shift &&
+	test_write_lines a 0 b c d e 1 2 tri 4 5 6 7 8 9 10 >file &&
+	test_tick &&
+	git commit -a -m tri &&
+	git tag tri &&
+	test_must_fail git am -3 ai.mbox &&
+	test_path_is_file .git/rebase-apply/provenance &&
+	test_write_lines a 0 b c d e 1 2 three-ish 4 5 6 seven 8 9 10 11 >file &&
+	git add file &&
+	test_tick &&
+	git am --continue &&
+	test_path_is_missing .git/rebase-apply &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 9 UNKNOWN - $(anchor HEAD file 9)" &&
+		echo "+ 13 HUMAN human $(anchor HEAD file 13)" &&
+		echo "+ 17 AI s1 $(anchor HEAD file 17)" &&
+		echo "- 9 UNKNOWN - $(anchor tri file 9)" &&
+		echo "- 13 HUMAN human $(anchor tri file 13)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am gives the lines of a path without a block to the human' '
+	git checkout -b resolved-other shift &&
+	test_write_lines a 0 b c d e 1 2 tri 4 5 6 7 8 9 10 >file &&
+	echo other >other &&
+	git add file other &&
+	test_tick &&
+	git commit -m tri-other &&
+	test_must_fail git am -3 ai.mbox &&
+	test_write_lines a 0 b c d e 1 2 three 4 5 6 seven 8 9 10 11 >file &&
+	echo another >>other &&
+	git add file other &&
+	test_tick &&
+	git am --continue &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "$human_actor" &&
+		echo "file file" &&
+		echo "+ 9 AI s1 $(anchor HEAD file 9)" &&
+		echo "+ 13 HUMAN human $(anchor HEAD file 13)" &&
+		echo "+ 17 AI s1 $(anchor HEAD file 17)" &&
+		echo "- 9 UNKNOWN - $(anchor HEAD^ file 9)" &&
+		echo "- 13 HUMAN human $(anchor HEAD^ file 13)" &&
+		echo "file other" &&
+		echo "+ 2 HUMAN human $(anchor HEAD other 2)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am of a patch without a block marks its lines UNKNOWN' '
+	git checkout --detach ai &&
+	test_tick &&
+	git am stock.mbox &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 17 UNKNOWN - $(anchor HEAD file 17)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am ignores a block that does not parse, with a warning' '
+	git checkout --detach base &&
+	sed -e "s/^    version 1\$/    version 9/" ai.mbox >bad.mbox &&
+	test_tick &&
+	git am bad.mbox 2>err &&
+	test_grep "ignoring the provenance record of patch 0001" err &&
+	{
+		header HEAD &&
+		echo "file file" &&
+		echo "+ 8 UNKNOWN - $(anchor HEAD file 8)" &&
+		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)" &&
+		echo "+ 16 UNKNOWN - $(anchor HEAD file 16)" &&
+		echo "- 8 UNKNOWN - $(anchor base file 8)" &&
+		echo "- 12 UNKNOWN - $(anchor base file 12)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
+'
+
+test_expect_success 'am of a root commit records its block' '
+	git format-patch -1 --stdout --root base >base.mbox &&
+	git checkout --orphan root &&
+	git rm -rf . &&
+	test_tick &&
+	git am base.mbox &&
+	git provenance show base >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_lines HEAD &&
+	git provenance verify HEAD
 '
 
 test_done

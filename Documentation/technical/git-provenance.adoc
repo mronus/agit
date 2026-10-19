@@ -635,10 +635,32 @@ commit` with `MERGE_HEAD`, so they record what they resolve, as any
 merge does (see "Commit"); they do not carry the records of the merges
 they replace, whose resolutions may no longer apply.
 
-Not covered yet: `git replay`, `git history`, and `git am` of mailbox
-patches, which have no source commit. Rewrites by tools that do not know the
-extension leave commits without records, which `git provenance adopt`
-repairs (see "Re-anchoring").
+`git am` of a mailbox patch has no source commit, but the mail may
+carry the line record of the commit it was made from (see
+"Maintenance"). The commit that `am` makes is then its own source,
+with that record located in it: each range is looked for among the
+runs of lines that the commit adds to its path (`+`) or deletes from
+it (`-`), as the window of as many lines whose bytes hash to the
+anchor of the range, the one closest to the recorded line numbers
+where several match, and a range found there gives the window its
+marks and actors. The lines it changes that no range found covers are
+`UNKNOWN` if the record had a range for the path that was not found,
+as a conflict resolution may have changed its lines, and otherwise go
+to the fallback owner, the human or the stamps of the journal. A mail
+without a block, as from stock Git, makes every line the commit
+changes `UNKNOWN`, as a pick of a commit without a record does. The
+`commit` line of the mailed record is only informational, `capture`
+follows the rules of rewrites, and no reasoning record comes with the
+mail. `am` keeps the record in `rebase-apply/provenance` until the
+commit is made, so that `am --continue` has it, writes the records
+in the ref transaction that moves `HEAD`, and empties the journal; as
+for picks, `provenance.require` does not refuse the commit and no
+advice is given. `am --rebasing`, for `rebase --apply`, keeps taking
+the records of `rebase-apply/original-commit`.
+
+Not covered yet: `git replay` and `git history`. Rewrites by tools
+that do not know the extension leave commits without records, which
+`git provenance adopt` repairs (see "Re-anchoring").
 
 Re-anchoring
 ~~~~~~~~~~~~
@@ -830,7 +852,8 @@ Maintenance
 - `format-patch` adds the line record of each commit to its mail, in a
   `Provenance:` block after the `---` separator, where the notes of
   `--notes` go and where stock `git am` and `git apply` ignore it (see
-  the format document). It is on by default, with
+  the format document); `am` records it for the commit it makes (see
+  "History rewriting"). It is on by default, with
   `format.provenance`, which defaults to `provenance.enabled`, and
   `--[no-]provenance`. The record keeps the `file` blocks of the
   paths that the patch shows, and there is no block when none is

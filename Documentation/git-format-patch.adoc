@@ -754,9 +754,11 @@ Provenance:
  hello.c | 4 +++-
 ------------
 
-Like notes, the block comes after the three-dash line, where the
-commit message has ended and the patch has not begun yet, so `git am`
-and `git apply` take the patch as they would without it.
+linkgit:git-am[1] records the block for the commit it makes from the
+patch (see the PROVENANCE section there).  Like notes, the block comes
+after the three-dash line, where the commit message has ended and the
+patch has not begun yet, so `git apply`, and `git am` of a Git that
+does not know the block, take the patch as they would without it.
 
 The record in the block keeps only the `file` blocks of the paths that
 the patch shows, so that a patch limited with a pathspec does not
