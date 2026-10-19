@@ -180,6 +180,10 @@ linux-provenance)
 	t6011.6
 	t7700.13
 	t7900.27 t7900.53
+	# A depth-limited clone makes the tips of the provenance refs
+	# shallow as well, and the two clones list the same shallow
+	# points in another order.
+	t5601.99
 	EOF
 	)"
 	export GIT_SKIP_TESTS
