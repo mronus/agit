@@ -42,6 +42,9 @@
 	N_("git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>\n" \
 	   "                     [<revision-range>...]")
 
+#define PROVENANCE_PRUNE_USAGE \
+	N_("git provenance prune [--dry-run]")
+
 #define PROVENANCE_STAT_USAGE \
 	N_("git provenance stat [--porcelain] [--no-cache] [<revision-range>...]")
 
@@ -559,6 +562,40 @@ static int cmd_provenance_remap(int argc, const char **argv, const char *prefix,
 	return ret;
 }
 
+static int print_pruned(const struct object_id *oid, void *data UNUSED)
+{
+	printf("%s pruned\n", oid_to_hex(oid));
+	return 0;
+}
+
+static int cmd_provenance_prune(int argc, const char **argv, const char *prefix,
+				struct repository *repo)
+{
+	const char * const prune_usage[] = {
+		PROVENANCE_PRUNE_USAGE,
+		NULL,
+	};
+	int dry_run = 0;
+	struct option options[] = {
+		OPT__DRY_RUN(&dry_run, N_("show what would be pruned")),
+		OPT_END(),
+	};
+	struct oid_array pruned = OID_ARRAY_INIT;
+	int ret = 0;
+
+	argc = parse_options(argc, argv, prefix, options, prune_usage, 0);
+	if (argc)
+		usage_with_options(prune_usage, options);
+
+	if (provenance_prune(repo, dry_run, &pruned))
+		ret = 1;
+	else
+		oid_array_for_each_unique(&pruned, print_pruned, NULL);
+
+	oid_array_clear(&pruned);
+	return ret;
+}
+
 int cmd_provenance(int argc,
 		   const char **argv,
 		   const char *prefix,
@@ -570,6 +607,7 @@ int cmd_provenance(int argc,
 		PROVENANCE_ADOPT_USAGE,
 		PROVENANCE_REMAP_USAGE,
 		PROVENANCE_PURGE_USAGE,
+		PROVENANCE_PRUNE_USAGE,
 		PROVENANCE_STAT_USAGE,
 		NULL,
 	};
@@ -580,6 +618,7 @@ int cmd_provenance(int argc,
 		OPT_SUBCOMMAND("adopt", &fn, cmd_provenance_adopt),
 		OPT_SUBCOMMAND("remap", &fn, cmd_provenance_remap),
 		OPT_SUBCOMMAND("purge", &fn, cmd_provenance_purge),
+		OPT_SUBCOMMAND("prune", &fn, cmd_provenance_prune),
 		OPT_SUBCOMMAND("stat", &fn, cmd_provenance_stat),
 		OPT_END(),
 	};

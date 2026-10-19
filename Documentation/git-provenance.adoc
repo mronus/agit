@@ -17,6 +17,7 @@ git provenance purge [--dry-run] <revision-range>...
 git provenance purge [--dry-run] --session <id>... [<revision-range>...]
 git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
 		     [<revision-range>...]
+git provenance prune [--dry-run]
 git provenance stat [--porcelain] [--no-cache] [<revision-range>...]
 
 DESCRIPTION
@@ -40,8 +41,8 @@ This command reads and checks records, gives records to commits made
 without them from the records of the commits they were made from
 (`adopt`), carries records over to the commits that replace theirs
 under other object ids (`remap`), removes what reasoning records must
-not hold (`purge`), and sums the line records of a range of history
-(`stat`).  See
+not hold (`purge`) and the records of commits that are gone
+(`prune`), and sums the line records of a range of history (`stat`).  See
 linkgit:git-notes[1] for a way to attach a record by hand.
 
 COMMANDS
@@ -140,7 +141,8 @@ $ join <(sort ../old.marks) <(sort ../new.marks) | cut -d' ' -f2,3 |
 ------------
 +
 The pairs of the blobs of the stream, and of the commits whose ids
-did not change, are ignored.
+did not change, are ignored.  The records that are not carried over
+stay keyed by the old ids, where `prune` removes them.
 
 `purge [--dry-run] <revision-range>...`::
 `purge [--dry-run] --session <id>... [<revision-range>...]`::
@@ -189,6 +191,19 @@ A clone that pushes its own `refs/provenance/reasoning` with `--force`
 without fetching first brings the purged records back, as it would
 for any rewritten history; so does a copy made by other means, such
 as a mail or a backup.
+
+`prune [--dry-run]`::
+	Remove the line and reasoning records of the commits that are
+	not objects of the repository, as linkgit:git-notes[1] `prune`
+	removes notes: a commit that exists but that no ref reaches
+	keeps its records.  Such records are left by an import that
+	changed the ids of commits, for the pairs that `remap` could
+	not carry over, or by a commit dropped from history once `gc`
+	has removed it.  One line is printed per commit whose records
+	are removed: `<object-id> pruned`.  The records that are left
+	are written as one new commit on top of each provenance ref
+	that changes, and both refs are updated together; nothing is
+	written if no record is removed.
 
 `stat [--porcelain] [--no-cache] [<revision-range>...]`::
 	Sum the line records of the commits in _<revision-range>_ and
@@ -258,8 +273,8 @@ OPTIONS
 
 `-n`::
 `--dry-run`::
-	With `remap` and `purge`, print what would be done, without
-	writing anything.
+	With `remap`, `purge` and `prune`, print what would be done,
+	without writing anything.
 
 `--session <id>`::
 	With `purge`, drop the session _<id>_ from the reasoning
@@ -296,11 +311,12 @@ is found is not a failure.  `remap` exits with status 0 unless an
 error occurred, such as a line of its input that is not a pair of
 object ids, which is reported with its number, or records that could
 not be read or written; a pair that is skipped is not a failure, and
-nothing is written after an error.  `purge` exits with status 0 unless an
-error occurred, also when there is nothing to purge.  `stat` exits
-with status 0 unless the line records cannot be read; a commit without
-a record, or with one that does not parse, is not a failure.  All of
-them exit with status 128 if an argument is not a commit.
+nothing is written after an error.  `purge` and `prune` exit with
+status 0 unless an error occurred, also when there is nothing to
+remove.  `stat` exits with status 0 unless the line records cannot be
+read; a commit without a record, or with one that does not parse, is
+not a failure.  All of them exit with status 128 if an argument is
+not a commit.
 
 SEE ALSO
 --------

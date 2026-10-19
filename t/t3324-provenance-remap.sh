@@ -3,7 +3,7 @@
 # Copyright (c) 2026 M. Abdullah Onus
 #
 
-test_description='Test carrying provenance records across imports with remap'
+test_description='Test carrying provenance records across imports with remap and prune'
 
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
@@ -239,6 +239,53 @@ test_expect_success 'nothing is written when nothing moves' '
 	test_cmp expect.refs actual.refs &&
 	git reflog refs/provenance/lines >actual.reflog &&
 	test_cmp expect.reflog actual.reflog
+'
+
+test_expect_success 'prune removes the records of the commits that are gone' '
+	import gone blob.out &&
+	old=$(git rev-parse main) &&
+	git -C gone rev-list main >kept.out &&
+	test_grep ! $old kept.out &&
+	refs gone >expect.refs &&
+	git -C gone provenance prune --dry-run >actual &&
+	echo "$old pruned" >expect &&
+	test_cmp expect actual &&
+	refs gone >actual.refs &&
+	test_cmp expect.refs actual.refs &&
+
+	git -C gone provenance prune >actual &&
+	test_cmp expect actual &&
+	for ref in refs/provenance/lines refs/provenance/reasoning
+	do
+		keys gone $ref >keys.out &&
+		test_grep ! $old keys.out &&
+		git rev-parse $ref >expect &&
+		git -C gone rev-parse $ref^ >actual &&
+		test_cmp expect actual &&
+		git -C gone reflog -1 --format=%gs $ref >actual &&
+		echo prune >expect &&
+		test_cmp expect actual || return 1
+	done &&
+	git -C gone provenance verify main~1 main~2 &&
+	keys gone refs/provenance/lines >keys.out &&
+	test_line_count = 2 keys.out
+'
+
+test_expect_success 'prune keeps the records of unreachable commits' '
+	git checkout -b side &&
+	echo side >side &&
+	git add side &&
+	test_tick &&
+	git commit -m side &&
+	side=$(git rev-parse side) &&
+	git checkout main &&
+	git branch -D side &&
+	refs . >expect.refs &&
+	git provenance prune >actual &&
+	test_must_be_empty actual &&
+	refs . >actual.refs &&
+	test_cmp expect.refs actual.refs &&
+	git provenance show $side
 '
 
 test_done

@@ -3,13 +3,14 @@
 
 #include "hash.h"
 
+struct oid_array;
 struct repository;
 
 /*
  * Carrying the records of commits over to the commits that replace them
  * under other ids, as an import of an edited "git fast-export" stream
- * makes.  See the "Re-anchoring" section of
- * Documentation/technical/git-provenance.adoc.
+ * makes, and removing the records of commits that are gone.  See the
+ * "Re-anchoring" section of Documentation/technical/git-provenance.adoc.
  */
 
 enum provenance_remap_result {
@@ -55,5 +56,16 @@ struct provenance_remap {
  */
 int provenance_remap(struct repository *r, struct provenance_remap *pairs,
 		     size_t nr, int dry_run);
+
+/*
+ * Remove the line and reasoning records of the commits that are not
+ * objects of `r`, as "git notes prune" removes notes, and append the
+ * ids of those commits to `pruned`, once per record.  Unless `dry_run`
+ * is set, the refs are written as by provenance_remap(), with the
+ * reflog message "prune".  Returns 0 on success and -1, after
+ * reporting an error, if the records cannot be read or written.
+ */
+int provenance_prune(struct repository *r, int dry_run,
+		     struct oid_array *pruned);
 
 #endif /* PROVENANCE_REMAP_H */

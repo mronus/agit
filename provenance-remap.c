@@ -1,5 +1,6 @@
 /*
- * Carrying provenance records over to the commits that replace theirs.
+ * Carrying provenance records over to the commits that replace theirs,
+ * and pruning the records of commits that are gone.
  */
 
 #include "git-compat-util.h"
@@ -10,6 +11,7 @@
 #include "ident.h"
 #include "notes.h"
 #include "odb.h"
+#include "oid-array.h"
 #include "provenance.h"
 #include "provenance-commit.h"
 #include "provenance-patch.h"
@@ -338,6 +340,55 @@ int provenance_remap(struct repository *r, struct provenance_remap *pairs,
 		ret = write_refs(r, refs, ARRAY_SIZE(refs),
 				 "remap: carry records over to new commits\n",
 				 "remap");
+
+	for (size_t i = 0; i < ARRAY_SIZE(refs); i++)
+		free_notes(&refs[i].t);
+	return ret;
+}
+
+struct prune_data {
+	struct repository *r;
+	struct oid_array *missing;
+};
+
+static int collect_missing(const struct object_id *commit,
+			   const struct object_id *blob UNUSED,
+			   char *path UNUSED, void *data)
+{
+	struct prune_data *pd = data;
+
+	/* as "git notes prune" decides it */
+	if (!odb_has_object(pd->r->objects, commit,
+			    ODB_HAS_OBJECT_RECHECK_PACKED |
+			    ODB_HAS_OBJECT_FETCH_PROMISOR))
+		oid_array_append(pd->missing, commit);
+	return 0;
+}
+
+int provenance_prune(struct repository *r, int dry_run,
+		     struct oid_array *pruned)
+{
+	struct records_ref refs[2];
+	int ret = 0;
+
+	records_ref_init(r, &refs[0], PROVENANCE_LINES_REF);
+	records_ref_init(r, &refs[1], PROVENANCE_REASONING_REF);
+	for (size_t i = 0; i < ARRAY_SIZE(refs); i++) {
+		struct oid_array missing = OID_ARRAY_INIT;
+		struct prune_data pd = { .r = r, .missing = &missing };
+
+		for_each_note(&refs[i].t, 0, collect_missing, &pd);
+		for (size_t j = 0; j < missing.nr; j++) {
+			remove_note(&refs[i].t, missing.oid[j].hash);
+			oid_array_append(pruned, &missing.oid[j]);
+		}
+		refs[i].changed = missing.nr > 0;
+		oid_array_clear(&missing);
+	}
+	if (!dry_run)
+		ret = write_refs(r, refs, ARRAY_SIZE(refs),
+				 "prune: remove the records of missing commits\n",
+				 "prune");
 
 	for (size_t i = 0; i < ARRAY_SIZE(refs); i++)
 		free_notes(&refs[i].t);
