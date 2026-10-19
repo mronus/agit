@@ -377,6 +377,19 @@ static void advise_provenance_rejected(const char *remote_name)
 	advise(_(message_advice_provenance_rejected), remote_name);
 }
 
+static const char message_advice_provenance_rewritten[] =
+	N_("The history of '%s' was rewritten locally,\n"
+	   "as 'git provenance purge' does. To replace the history of the remote\n"
+	   "with it, use 'git push --force %s %s'.");
+
+static void advise_provenance_rewritten(const char *remote_name,
+					const char *ref)
+{
+	if (!advice_enabled(ADVICE_PUSH_UPDATE_REJECTED))
+		return;
+	advise(_(message_advice_provenance_rewritten), ref, remote_name, ref);
+}
+
 static const char message_advice_provenance_refused[] =
 	N_("The other refs were pushed. To stop pushing the provenance refs to\n"
 	   "'%s', set 'remote.%s.provenance' to false.");
@@ -427,7 +440,14 @@ static int push_provenance_again(struct remote *remote, const char *url,
 	transport->push_options = push_options;
 	if (push_with_options(transport, again, flags, use_cas, provenance,
 			      0)) {
-		advise_provenance_rejected(remote->name);
+		const char *rewritten =
+			provenance_rewritten_locally(the_repository,
+						     remote->name, pushed);
+
+		if (rewritten)
+			advise_provenance_rewritten(remote->name, rewritten);
+		else
+			advise_provenance_rejected(remote->name);
 		return 1;
 	}
 	return 0;

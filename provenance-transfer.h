@@ -39,7 +39,11 @@ void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
  * the "Transfer" section of the design describes: create it,
  * fast-forward it, or make a merge commit whose tree is the union of
  * both sides, keeping the local record (with a warning) for a commit
- * that both sides changed.  With `verbose` > 0, report each merged
+ * that both sides changed.  If the two sides share no history and
+ * the value the tracking ref had before the fetch is in the history
+ * of one side only, the other side rewrote the history of the ref:
+ * the merge is made against that value and has the side that rewrote
+ * it as its only parent.  With `verbose` > 0, report each merged
  * ref on stderr.  Nothing is merged if "remote.<name>.provenance" of
  * `remote_name` is false.  Returns 0 on success and -1, after
  * reporting an error, if a ref could not be merged.
@@ -105,5 +109,16 @@ void provenance_update_tracking(struct repository *r, struct remote *remote,
  */
 int provenance_fetch_rejected(struct repository *r, const char *remote_name,
 			      const struct ref *refs);
+
+/*
+ * Return the name of a provenance ref that the push whose result is
+ * `refs` failed to update because the remote moved, and whose history
+ * was rewritten locally, as "git provenance purge" does: the tracking
+ * ref of the remote `remote_name` is not in the history of the local
+ * ref.  Return NULL if there is none.
+ */
+const char *provenance_rewritten_locally(struct repository *r,
+					 const char *remote_name,
+					 const struct ref *refs);
 
 #endif /* PROVENANCE_TRANSFER_H */

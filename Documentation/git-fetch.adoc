@@ -227,6 +227,14 @@ sides; if both sides changed the record of the same commit, the local
 one is kept and a warning names the commit.  With `--verbose`, each
 merged ref is reported.  `--dry-run` merges nothing.
 
+If the two sides share no history because one of them rewrote it, as
+`git provenance purge` does (see linkgit:git-provenance[1]), the value
+the tracking ref had before the fetch tells which side did: the merge
+is made against that value and has the rewritten side as its only
+parent, so that a purge on either side is kept and the records added
+on the other side since then are carried over.  When this does not
+tell, as in a shallow clone, the merge takes the records of both.
+
 OUTPUT
 ------
 
