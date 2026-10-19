@@ -498,6 +498,15 @@ Viewing
   checks that records parse, refer to paths and ranges that exist,
   and that anchors match.
 
+- `provenance stat` sums the line records of the commits of a
+  revision walk, which it takes as `git log` does: the lines added and
+  removed by mark, and the share of `AI` and `MIXED` lines among the
+  added ones, which for one commit is its `%(provenance:share)`. The
+  records are looked up in the notes tree of `refs/provenance/lines`,
+  loaded once for the walk. A human summary and a `--porcelain` form
+  of `key value` lines are printed; scripts that want a share over
+  time run it once per period.
+
 History rewriting
 ~~~~~~~~~~~~~~~~~
 Git already copies notes across rewrites (`notes.rewrite.*`,
@@ -1129,6 +1138,11 @@ Future Work
 
 - A query cache for repository-wide questions, such as the share of
   AI-written lines over a range of history.
+
+- The share of AI-written lines in the current tree, which is a blame
+  of every file rather than a sum of records.
+
+- Breakdowns of `provenance stat` by model and by session.
 
 Related Links
 -------------

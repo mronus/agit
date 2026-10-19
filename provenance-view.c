@@ -13,6 +13,7 @@
 #include "provenance.h"
 #include "provenance-attribute.h"
 #include "provenance-journal.h"
+#include "provenance-stat.h"
 #include "refs.h"
 #include "repository.h"
 #include "strbuf.h"
@@ -418,26 +419,10 @@ out:
 static void format_share(const struct provenance_record *rec,
 			 struct strbuf *sb)
 {
-	uintmax_t total = 0, ai = 0;
+	struct provenance_stat stat = { 0 };
 
-	for (size_t i = 0; i < rec->files_nr; i++) {
-		const struct provenance_file *file = &rec->files[i];
-
-		for (size_t j = 0; j < file->ranges_nr; j++) {
-			const struct provenance_range *range = &file->ranges[j];
-			uintmax_t n;
-
-			if (range->side != '+' || range->end < range->begin)
-				continue;
-			n = range->end - range->begin + 1;
-			total += n;
-			if (range->mark == PROVENANCE_MARK_AI ||
-			    range->mark == PROVENANCE_MARK_MIXED)
-				ai += n;
-		}
-	}
-	strbuf_addf(sb, "%"PRIuMAX"%%",
-		    total ? (ai * 100 + total / 2) / total : 0);
+	provenance_stat_add_record(&stat, rec);
+	strbuf_addf(sb, "%"PRIuMAX"%%", provenance_stat_share(&stat));
 }
 
 /* The distinct models (or sessions) of the AI actors, in order. */
