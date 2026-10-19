@@ -964,7 +964,7 @@ of `format-patch` with what stock Git writes and see the
 `ci/run-build-and-tests.sh`; the upstream test scripts are not
 changed. A failure for any other reason is a bug
 in the extension and is fixed, with a test in the provenance scripts
-(t3312 to t3319), which run in both kinds of jobs.
+(t3312 to t3319, t3322 and t3323), which run in both kinds of jobs.
 
 Integrity
 ---------

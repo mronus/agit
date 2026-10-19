@@ -139,7 +139,7 @@ static int purge_one(struct repository *r, struct notes_tree *t,
 		/* the summary follows the first blank line */
 		const char *blank = strstr(buf.buf, "\n\n");
 		struct strbuf summary = STRBUF_INIT;
-		size_t start = blank ? blank - buf.buf + 2 : buf.len;
+		size_t start = blank ? (size_t)(blank - buf.buf) + 2 : buf.len;
 
 		strbuf_add(&summary, buf.buf + start, buf.len - start);
 		purged->matches = redact(&summary, opts->pattern);
