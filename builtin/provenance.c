@@ -4,6 +4,7 @@
 
 #include "git-compat-util.h"
 
+#include "abspath.h"
 #include "advice.h"
 #include "builtin.h"
 #include "commit.h"
@@ -17,6 +18,7 @@
 #include "provenance.h"
 #include "provenance-adopt.h"
 #include "provenance-purge.h"
+#include "provenance-remap.h"
 #include "provenance-stat.h"
 #include "quote.h"
 #include "repository.h"
@@ -42,6 +44,9 @@
 
 #define PROVENANCE_STAT_USAGE \
 	N_("git provenance stat [--porcelain] [--no-cache] [<revision-range>...]")
+
+#define PROVENANCE_REMAP_USAGE \
+	N_("git provenance remap [--dry-run] [<file>]")
 
 static struct commit *lookup_commit_arg(struct repository *repo,
 					const char *arg)
@@ -463,6 +468,97 @@ static int cmd_provenance_stat(int argc, const char **argv, const char *prefix,
 	return ret;
 }
 
+/*
+ * Read the "<old-oid> <new-oid>" lines of `in` into `pairs`, ignoring
+ * blank lines and "#" comments.
+ */
+static int read_pairs(struct repository *repo, FILE *in,
+		      struct provenance_remap **pairs, size_t *nr)
+{
+	struct strbuf line = STRBUF_INIT;
+	uintmax_t lineno = 0;
+	size_t alloc = 0;
+	int ret = 0;
+
+	while (strbuf_getline(&line, in) != EOF) {
+		struct provenance_remap *p;
+		const char *end;
+
+		lineno++;
+		strbuf_trim(&line);
+		if (!line.len || line.buf[0] == '#')
+			continue;
+		ALLOC_GROW(*pairs, *nr + 1, alloc);
+		p = &(*pairs)[*nr];
+		if (parse_oid_hex_algop(line.buf, &p->old_oid, &end,
+					repo->hash_algo) ||
+		    !isspace(*end) ||
+		    parse_oid_hex_algop(end + strspn(end, " \t"), &p->new_oid,
+					&end, repo->hash_algo) ||
+		    *end) {
+			ret = error(_("line %"PRIuMAX": expected '<old-oid> <new-oid>': %s"),
+				    lineno, line.buf);
+			break;
+		}
+		(*nr)++;
+	}
+
+	strbuf_release(&line);
+	return ret;
+}
+
+static int cmd_provenance_remap(int argc, const char **argv, const char *prefix,
+				struct repository *repo)
+{
+	const char * const remap_usage[] = {
+		PROVENANCE_REMAP_USAGE,
+		NULL,
+	};
+	int dry_run = 0;
+	struct option options[] = {
+		OPT__DRY_RUN(&dry_run, N_("show what would be moved")),
+		OPT_END(),
+	};
+	static const char *words[] = {
+		[PROVENANCE_REMAP_MOVED] = "moved",
+		[PROVENANCE_REMAP_REATTACHED] = "re-attached",
+		[PROVENANCE_REMAP_NOT_COMMIT] = "skipped: not a commit",
+		[PROVENANCE_REMAP_HAS_RECORD] = "skipped: has a line record",
+		[PROVENANCE_REMAP_BAD_RECORD] = "skipped: unparsable record",
+	};
+	struct provenance_remap *pairs = NULL;
+	size_t nr = 0;
+	FILE *in = stdin;
+	int ret = 0;
+
+	argc = parse_options(argc, argv, prefix, options, remap_usage, 0);
+	if (argc > 1)
+		usage_with_options(remap_usage, options);
+
+	if (argc) {
+		char *path = prefix_filename(prefix, argv[0]);
+
+		in = xfopen(path, "r");
+		free(path);
+	}
+	if (read_pairs(repo, in, &pairs, &nr) ||
+	    provenance_remap(repo, pairs, nr, dry_run))
+		ret = 1;
+	if (in != stdin)
+		fclose(in);
+
+	for (size_t i = 0; !ret && i < nr; i++) {
+		if (pairs[i].result == PROVENANCE_REMAP_NONE)
+			continue;
+		printf("%s ", oid_to_hex(&pairs[i].old_oid));
+		printf("%s %s\n", oid_to_hex(&pairs[i].new_oid),
+		       words[pairs[i].result]);
+	}
+
+	free(pairs);
+	return ret;
+}
+
 int cmd_provenance(int argc,
 		   const char **argv,
 		   const char *prefix,
@@ -472,6 +568,7 @@ int cmd_provenance(int argc,
 		PROVENANCE_SHOW_USAGE,
 		PROVENANCE_VERIFY_USAGE,
 		PROVENANCE_ADOPT_USAGE,
+		PROVENANCE_REMAP_USAGE,
 		PROVENANCE_PURGE_USAGE,
 		PROVENANCE_STAT_USAGE,
 		NULL,
@@ -481,6 +578,7 @@ int cmd_provenance(int argc,
 		OPT_SUBCOMMAND("show", &fn, cmd_provenance_show),
 		OPT_SUBCOMMAND("verify", &fn, cmd_provenance_verify),
 		OPT_SUBCOMMAND("adopt", &fn, cmd_provenance_adopt),
+		OPT_SUBCOMMAND("remap", &fn, cmd_provenance_remap),
 		OPT_SUBCOMMAND("purge", &fn, cmd_provenance_purge),
 		OPT_SUBCOMMAND("stat", &fn, cmd_provenance_stat),
 		OPT_END(),

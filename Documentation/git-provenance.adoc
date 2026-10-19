@@ -3,7 +3,7 @@ git-provenance(1)
 
 NAME
 ----
-git-provenance - Show, verify, adopt, purge and sum AI provenance of commits
+git-provenance - Show, verify, maintain and sum AI provenance of commits
 
 
 SYNOPSIS
@@ -12,6 +12,7 @@ SYNOPSIS
 git provenance show [--reasoning] <commit>
 git provenance verify [<commit>...]
 git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...
+git provenance remap [--dry-run] [<file>]
 git provenance purge [--dry-run] <revision-range>...
 git provenance purge [--dry-run] --session <id>... [<revision-range>...]
 git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
@@ -37,8 +38,10 @@ PROVENANCE sections).
 
 This command reads and checks records, gives records to commits made
 without them from the records of the commits they were made from
-(`adopt`), removes what reasoning records must not hold (`purge`),
-and sums the line records of a range of history (`stat`).  See
+(`adopt`), carries records over to the commits that replace theirs
+under other object ids (`remap`), removes what reasoning records must
+not hold (`purge`), and sums the line records of a range of history
+(`stat`).  See
 linkgit:git-notes[1] for a way to attach a record by hand.
 
 COMMANDS
@@ -88,6 +91,56 @@ of the sources that some line was taken from, and the line record is
 marked `capture adopted`.  Nothing is written for a commit that no
 source accounts for, so that it can be adopted once its sources have
 been fetched.
+
+`remap [--dry-run] [<file>]`::
+	Carry the records of commits over to the commits that replace
+	them under other object ids, such as those that
+	linkgit:git-fast-import[1] makes from an edited stream of
+	linkgit:git-fast-export[1].  Pairs `<old> <new>` of object ids,
+	one per line, are read from _<file>_, or from the standard input
+	if it is not given; blank lines and lines that start with `#`
+	are ignored.  The pairs are processed in order, and one line is
+	printed per pair whose old commit has records:
+	`<old> <new> moved` if they were moved,
+	`<old> <new> re-attached` if the line record was re-attached,
+	or `<old> <new> skipped: <reason>` if they were left alone,
+	with a warning.
++
+A line record that verifies against the new commit, as `verify`
+checks it, is moved as it is, with its `commit` line rewritten: the
+two commits differ only in their messages, their committers or the
+like.  Otherwise their changes differ, and the record is re-attached
+as linkgit:git-am[1] records the line record of a patch mail: each of
+its ranges is looked for by its anchor among the lines that the new
+commit changes, the lines of the new commit that no range found
+accounts for are `UNKNOWN`, and the record is marked
+`capture adopted`.  The reasoning record is moved as it is, with its
+`commit` line rewritten.  A pair is skipped if the new object id does
+not name a commit, if the new commit has a line record already, or
+if a record of the old commit cannot be parsed.  A pair whose two ids
+are the same is ignored.
++
+The records that move are written as one new commit on top of each
+provenance ref that changes, and both refs are updated together;
+nothing is written if no record moves.  The map of the old object ids
+to the new ones is found by joining the marks files that the export
+and the import write, which give each commit of the stream the same
+mark.  Here a stream is edited and imported into a new repository,
+which receives the records keyed by the old ids, and the records are
+then carried over (`<(...)` is the process substitution of shells
+such as bash):
++
+------------
+$ git fast-export --all --export-marks=../old.marks >../stream
+$ <edit or filter ../stream>
+$ git init ../new && cd ../new
+$ git fast-import --export-marks=../new.marks <../stream
+$ join <(sort ../old.marks) <(sort ../new.marks) | cut -d' ' -f2,3 |
+  git provenance remap
+------------
++
+The pairs of the blobs of the stream, and of the commits whose ids
+did not change, are ignored.
 
 `purge [--dry-run] <revision-range>...`::
 `purge [--dry-run] --session <id>... [<revision-range>...]`::
@@ -205,8 +258,8 @@ OPTIONS
 
 `-n`::
 `--dry-run`::
-	With `purge`, print what would be purged, without writing
-	anything.
+	With `remap` and `purge`, print what would be done, without
+	writing anything.
 
 `--session <id>`::
 	With `purge`, drop the session _<id>_ from the reasoning
@@ -239,7 +292,11 @@ not.  `verify` exits with status 0 if every record that exists
 verifies, and 1 otherwise; a commit without a record is not a
 failure.  `adopt` exits with status 0 unless an error occurred, such
 as a record that could not be written; a commit for which no source
-is found is not a failure.  `purge` exits with status 0 unless an
+is found is not a failure.  `remap` exits with status 0 unless an
+error occurred, such as a line of its input that is not a pair of
+object ids, which is reported with its number, or records that could
+not be read or written; a pair that is skipped is not a failure, and
+nothing is written after an error.  `purge` exits with status 0 unless an
 error occurred, also when there is nothing to purge.  `stat` exits
 with status 0 unless the line records cannot be read; a commit without
 a record, or with one that does not parse, is not a failure.  All of

@@ -45,6 +45,14 @@ struct provenance_rewrite {
 	 */
 	struct commit *mail;
 	const struct provenance_record *mail_lines;
+	/*
+	 * With `mail`: `mail_lines` is the line record of another commit
+	 * with the same changes, located in the commit, as "git provenance
+	 * remap" carries it over.  The lines it does not account for are
+	 * UNKNOWN instead of the human's, `capture` is `adopted`, and the
+	 * journal is not read (see PROVENANCE_REWRITE_ADOPT).
+	 */
+	unsigned adopt : 1;
 };
 
 /*

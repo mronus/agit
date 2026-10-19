@@ -110,6 +110,8 @@ int provenance_commit_records(struct repository *r,
 		BUG("provenance: a revert must have a pick and no amend");
 	if (rw && rw->mail && (rw->amend || rw->pick || rw->picks.nr))
 		BUG("provenance: a mail must be the only source");
+	if (rw && rw->adopt && !rw->mail)
+		BUG("provenance: only a mail can be adopted");
 	if (rw && rw->mail)
 		add_source(&sources, &nr, &alloc, rw->mail, 0, 0);
 	if (rw && rw->amend)
@@ -163,7 +165,10 @@ int provenance_commit_records(struct repository *r,
 
 	if (rw && rw->amend)
 		flags |= PROVENANCE_REWRITE_AMEND;
-	if (provenance_journal_read(r, &journal) ||
+	if (rw && rw->adopt)
+		flags |= PROVENANCE_REWRITE_ADOPT;
+	if ((!(flags & PROVENANCE_REWRITE_ADOPT) &&
+	     provenance_journal_read(r, &journal)) ||
 	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
 					 flags, &journal, session,
 					 human, lines, reasoning))
