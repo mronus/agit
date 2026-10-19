@@ -1,0 +1,120 @@
+agit v2.56.0.agit.1 Release Notes
+=================================
+
+agit is a distribution of Git with the provenance extension, and this
+is its first release. It is based on Git v2.56.0 and the development
+of Git that followed it up to "The 6th batch" (c51408889c, 2026-10-16),
+with the extension on top. An agit repository is a plain Git
+repository: the records live in notes-style refs under
+refs/provenance/, nothing on the wire changes, and any Git can clone,
+fetch and push it.
+
+The extension is on by default ("provenance.enabled"). Every commit
+made with agit gets a line record that marks each changed line AI,
+MIXED, HUMAN or UNKNOWN, and a reasoning record when an AI session
+took part. The design is described in
+Documentation/technical/git-provenance.adoc and the record formats in
+Documentation/technical/git-provenance-format.adoc.
+
+
+Capturing
+---------
+
+ * "git stamp begin", "end", "edit", "reason" and "claim" let the tool
+   that runs an AI agent record what a session changes in the working
+   tree, in a capture journal that the next commit consumes.
+
+ * "git commit" writes the line and reasoning records of a commit in
+   the same ref transaction as the commit, from the journal and the
+   diff. "--session <id>" links a session that left no stamps. A
+   commit made without one gets an advice message
+   ("advice.provenanceSession"), which "provenance.require" turns into
+   a refusal.
+
+ * Lines that no agent touched are HUMAN. A line that both an agent
+   and a human touched is MIXED. Lines that a rewrite takes from a
+   commit without a record, or that cannot be located, are UNKNOWN.
+
+
+Rewrites and merges
+-------------------
+
+ * "git commit --amend", "git rebase", "git cherry-pick" and "git
+   revert" (both also with "--no-commit"), "git merge" (also with
+   "--squash") and "git am" carry the records of the commits they
+   rewrite over to the commits they make, finding each range again by
+   its content. A merge records only what it resolves.
+
+ * "git provenance adopt" gives records to commits made without the
+   extension, from the records of the commits they were made from,
+   matching by content.
+
+
+Viewing
+-------
+
+ * "git diff", "git show", "git log -p" and "git blame" take
+   "--provenance" and show a one-character mark per line: A, M, H or
+   ?. Uncommitted changes are marked live from the journal.
+
+ * "git log --format" takes "%(provenance:summary)",
+   "%(provenance:share)", "%(provenance:models)" and
+   "%(provenance:sessions)".
+
+ * "git provenance show" prints the records of a commit, "git
+   provenance verify" checks them against it, and "git provenance
+   stat" sums the line records of a range of history, with a cache of
+   the totals under objects/info/.
+
+
+Transfer
+--------
+
+ * "git fetch", "git push" and "git clone" carry refs/provenance/lines
+   and refs/provenance/reasoning with the branches: fetched records
+   are merged into the local refs, the records go up with the branch
+   that is pushed, and tracking refs under refs/provenance/remotes/
+   are kept as "git remote" maintains them. "remote.<name>.provenance"
+   turns this off for a remote, and "provenance.reasoning.fetch" and
+   "provenance.reasoning.push" keep the reasoning local.
+
+ * "git format-patch" writes the line record of each commit into the
+   mail after the "---" line, where stock Git ignores it, and "git am"
+   records it for the commit it makes ("format.provenance",
+   "--[no-]provenance").
+
+ * "git fast-export" and "git fast-import" carry the records as notes.
+   When an import changes the commit ids, "git provenance remap"
+   carries the records over to the new commits along the map that the
+   marks files of the export and the import give.
+
+
+Maintenance and privacy
+-----------------------
+
+ * "git provenance purge" removes reasoning records by commit, drops a
+   session from them, or redacts a pattern in their text, rewriting
+   refs/provenance/reasoning so that the old text is no longer
+   reachable from it; fetch and push keep such a rewrite.
+
+ * "git provenance prune" removes the records of commits that are
+   gone.
+
+
+Testing
+-------
+
+ * The upstream test suite runs in CI twice, with provenance off, as
+   stock Git behaves, and with provenance on, as users get it; the
+   tests that only compare the output of stock Git are skipped in the
+   second run.
+
+
+Not in this release
+-------------------
+
+ * "git replay" and "git history" make commits without records; "git
+   provenance adopt" repairs them (issue #26).
+
+ * Stamps are given on the command line; there is no resident daemon
+   (issue #23).
