@@ -62,8 +62,8 @@ keys () {
 
 # Print the commits that the provenance refs of <repo> point to.
 #
-# Usage: refs <repo>
-refs () {
+# Usage: provenance_refs <repo>
+provenance_refs () {
 	git -C "$1" rev-parse refs/provenance/lines refs/provenance/reasoning
 }
 
@@ -175,7 +175,7 @@ test_expect_success 'a record whose changes differ is re-attached' '
 '
 
 test_expect_success 'pairs whose new commit is missing or has a record are skipped' '
-	refs . >expect.refs &&
+	provenance_refs . >expect.refs &&
 	second=$(git rev-parse main~1) &&
 	third=$(git rev-parse main) &&
 	missing=$(test_oid deadbeef) &&
@@ -195,15 +195,15 @@ test_expect_success 'pairs whose new commit is missing or has a record are skipp
 	test_grep "warning: .* $missing is not a commit" err &&
 	test_grep "warning: .* $blob is not a commit" err &&
 	test_grep "warning: .* $third has a line record" err &&
-	refs . >actual.refs &&
+	provenance_refs . >actual.refs &&
 	test_cmp expect.refs actual.refs
 '
 
 test_expect_success '--dry-run writes nothing' '
 	import dry msg.out &&
-	refs dry >expect.refs &&
+	provenance_refs dry >expect.refs &&
 	git -C dry provenance remap --dry-run ../dry.map >dry.out &&
-	refs dry >actual.refs &&
+	provenance_refs dry >actual.refs &&
 	test_cmp expect.refs actual.refs &&
 	test_line_count = 3 dry.out &&
 	git -C dry provenance remap ../dry.map >actual &&
@@ -211,7 +211,7 @@ test_expect_success '--dry-run writes nothing' '
 '
 
 test_expect_success 'a line that is not a pair is an error' '
-	refs . >expect.refs &&
+	provenance_refs . >expect.refs &&
 	first=$(git rev-parse main~2) &&
 	printf "# map\n%s %s\n%s\n" $first $first $first >bad.map &&
 	test_must_fail git provenance remap bad.map >actual 2>err &&
@@ -220,12 +220,12 @@ test_expect_success 'a line that is not a pair is an error' '
 	printf "%s %s x\n" $first $first |
 	test_must_fail git provenance remap 2>err &&
 	test_grep "line 1: " err &&
-	refs . >actual.refs &&
+	provenance_refs . >actual.refs &&
 	test_cmp expect.refs actual.refs
 '
 
 test_expect_success 'nothing is written when nothing moves' '
-	refs . >expect.refs &&
+	provenance_refs . >expect.refs &&
 	git reflog refs/provenance/lines >expect.reflog &&
 	first=$(git rev-parse main~2) &&
 	git rev-parse main:file main:other >blobs.out &&
@@ -235,7 +235,7 @@ test_expect_success 'nothing is written when nothing moves' '
 	test_must_be_empty actual &&
 	git provenance remap </dev/null >actual &&
 	test_must_be_empty actual &&
-	refs . >actual.refs &&
+	provenance_refs . >actual.refs &&
 	test_cmp expect.refs actual.refs &&
 	git reflog refs/provenance/lines >actual.reflog &&
 	test_cmp expect.reflog actual.reflog
@@ -246,11 +246,11 @@ test_expect_success 'prune removes the records of the commits that are gone' '
 	old=$(git rev-parse main) &&
 	git -C gone rev-list main >kept.out &&
 	test_grep ! $old kept.out &&
-	refs gone >expect.refs &&
+	provenance_refs gone >expect.refs &&
 	git -C gone provenance prune --dry-run >actual &&
 	echo "$old pruned" >expect &&
 	test_cmp expect actual &&
-	refs gone >actual.refs &&
+	provenance_refs gone >actual.refs &&
 	test_cmp expect.refs actual.refs &&
 
 	git -C gone provenance prune >actual &&
@@ -280,10 +280,10 @@ test_expect_success 'prune keeps the records of unreachable commits' '
 	side=$(git rev-parse side) &&
 	git checkout main &&
 	git branch -D side &&
-	refs . >expect.refs &&
+	provenance_refs . >expect.refs &&
 	git provenance prune >actual &&
 	test_must_be_empty actual &&
-	refs . >actual.refs &&
+	provenance_refs . >actual.refs &&
 	test_cmp expect.refs actual.refs &&
 	git provenance show $side
 '
