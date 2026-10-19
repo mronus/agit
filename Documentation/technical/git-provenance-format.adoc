@@ -467,3 +467,41 @@ provenance is enabled.  A reader ignores lines that do not parse, with
 a warning.  The commits that remove the journal remove
 this file with it, and only they: `git stamp` leaves it alone.  Like
 the journal, it is never transferred.
+
+
+Statistics cache
+----------------
+
+`git provenance stat` keeps the number of lines of each line record
+that it has read in `$GIT_DIR/objects/info/provenance-stat`, next to
+the commit-graph, so that it does not have to read and parse the
+records again.  The file lies in the object directory, which worktrees
+share; it is derived from the records, never transferred, and can be
+deleted at any time, which is how it is rebuilt.
+
+It is a text file with LF line endings.  The first line is `version
+1`, and each line after it is the entry of one line record:
+
+----
+version 1
+<record> <added-ai> <added-mixed> <added-human> <added-unknown> <removed-ai> <removed-mixed> <removed-human> <removed-unknown>
+----
+
+Fields are separated by a single space.  `<record>` is the object id
+of the blob of the record, the note that `refs/provenance/lines` maps
+the commit to, in full, as lowercase hexadecimal, in the hash algorithm
+of the repository.  The eight counts are decimal numbers: the lines of
+the `+` ranges of the record marked `AI`, `MIXED`, `HUMAN` and
+`UNKNOWN`, then those of its `-` ranges.  An entry is keyed by the
+record and not by the commit, so that a record that is replaced, such
+as by `git provenance adopt --force`, has a new blob and no entry, and
+an entry for a blob that no record uses any more is never looked up.
+There is no entry for a record that does not parse.
+
+A reader that finds a first line other than `version 1`, or a line
+that does not parse, including a last line without a LF, ignores the
+whole file, with a warning.  A writer adds entries while holding
+`$GIT_DIR/objects/info/provenance-stat.lock`: it reads the file again,
+and writes it back with the new entries after the existing ones, or
+writes it anew if the file is missing or is ignored.  Two entries for
+the same record hold the same counts, and a reader may use either.

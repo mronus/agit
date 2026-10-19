@@ -12,10 +12,12 @@
 #include "hex.h"
 #include "object-name.h"
 #include "oid-array.h"
+#include "pager.h"
 #include "parse-options.h"
 #include "provenance.h"
 #include "provenance-adopt.h"
 #include "provenance-purge.h"
+#include "provenance-stat.h"
 #include "quote.h"
 #include "repository.h"
 #include "revision.h"
@@ -37,6 +39,9 @@
 	N_("git provenance purge [--dry-run] --session <id>... [<revision-range>...]"), \
 	N_("git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>\n" \
 	   "                     [<revision-range>...]")
+
+#define PROVENANCE_STAT_USAGE \
+	N_("git provenance stat [--porcelain] [--no-cache] [<revision-range>...]")
 
 static struct commit *lookup_commit_arg(struct repository *repo,
 					const char *arg)
@@ -342,6 +347,122 @@ static int cmd_provenance_purge(int argc, const char **argv, const char *prefix,
 	return ret;
 }
 
+static const char *stat_sides[] = { "added", "removed" };
+
+static void print_stat_porcelain(const struct provenance_stat *stat)
+{
+	static const char *keys[] = {
+		[PROVENANCE_MARK_AI] = "ai",
+		[PROVENANCE_MARK_MIXED] = "mixed",
+		[PROVENANCE_MARK_HUMAN] = "human",
+		[PROVENANCE_MARK_UNKNOWN] = "unknown",
+	};
+	const uintmax_t *sides[] = { stat->added, stat->removed };
+
+	printf("commits %"PRIuMAX"\n", stat->commits);
+	printf("recorded %"PRIuMAX"\n", stat->recorded);
+	for (size_t i = 0; i < ARRAY_SIZE(sides); i++) {
+		uintmax_t total = 0;
+
+		for (size_t m = 0; m < ARRAY_SIZE(keys); m++)
+			total += sides[i][m];
+		printf("%s %"PRIuMAX"\n", stat_sides[i], total);
+		for (size_t m = 0; m < ARRAY_SIZE(keys); m++)
+			printf("%s.%s %"PRIuMAX"\n", stat_sides[i], keys[m],
+			       sides[i][m]);
+	}
+	printf("share %"PRIuMAX"\n", provenance_stat_share(stat));
+}
+
+static uintmax_t percent(uintmax_t n, uintmax_t total)
+{
+	return total ? (n * 100 + total / 2) / total : 0;
+}
+
+static int max_width(uintmax_t a, uintmax_t b)
+{
+	return decimal_width(a > b ? a : b);
+}
+
+static void print_stat(const struct provenance_stat *stat)
+{
+	const uintmax_t *sides[] = { stat->added, stat->removed };
+	uintmax_t total[2] = { 0 };
+	uintmax_t share = provenance_stat_share(stat);
+	size_t marks = ARRAY_SIZE(stat->added);
+	/* the share has a '%' after its digits */
+	int width = max_width(stat->commits, share * 10);
+
+	for (size_t i = 0; i < ARRAY_SIZE(sides); i++) {
+		for (size_t m = 0; m < marks; m++)
+			total[i] += sides[i][m];
+		if (decimal_width(total[i]) > width)
+			width = decimal_width(total[i]);
+	}
+
+	printf("%-7s  %*"PRIuMAX"  (%"PRIuMAX" recorded)\n",
+	       "commits", width, stat->commits, stat->recorded);
+	for (size_t i = 0; i < ARRAY_SIZE(sides); i++) {
+		printf("%-7s  %*"PRIuMAX, stat_sides[i], width, total[i]);
+		for (size_t m = 0; m < marks; m++) {
+			uintmax_t pct = percent(sides[i][m], total[i]);
+			int pct_width = max_width(percent(stat->added[m], total[0]),
+						  percent(stat->removed[m], total[1]));
+
+			printf("  %s %*"PRIuMAX" (%"PRIuMAX"%%)",
+			       provenance_mark_name(m),
+			       max_width(stat->added[m], stat->removed[m]),
+			       sides[i][m], pct);
+			if (m + 1 < marks)
+				printf("%*s", pct_width - decimal_width(pct), "");
+		}
+		putchar('\n');
+	}
+	printf("%-7s  %*"PRIuMAX"%%\n", "share", width - 1, share);
+}
+
+static int cmd_provenance_stat(int argc, const char **argv, const char *prefix,
+			       struct repository *repo)
+{
+	const char * const stat_usage[] = {
+		PROVENANCE_STAT_USAGE,
+		NULL,
+	};
+	int porcelain = 0, use_cache = 1;
+	struct option options[] = {
+		OPT_BOOL(0, "porcelain", &porcelain,
+			 N_("print one 'key value' line per count")),
+		OPT_BOOL(0, "cache", &use_cache,
+			 N_("use the cache of the line record totals")),
+		OPT_END(),
+	};
+	struct setup_revision_opt opt = { .def = "HEAD" };
+	struct provenance_stat stat;
+	struct rev_info revs;
+	int ret = 0;
+
+	argc = parse_options(argc, argv, prefix, options, stat_usage,
+			     PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN_OPT);
+
+	/* a single commit is its history, as for "git log" */
+	repo_init_revisions(repo, &revs, prefix);
+	argc = setup_revisions(argc, argv, &revs, &opt);
+	if (argc > 1)
+		die(_("unrecognized argument: %s"), argv[1]);
+	if (revs.prune_data.nr)
+		die(_("pathspec arguments not supported"));
+
+	if (provenance_stat_walk(repo, &revs, use_cache, &stat))
+		ret = 1;
+	else if (porcelain)
+		print_stat_porcelain(&stat);
+	else
+		print_stat(&stat);
+
+	release_revisions(&revs);
+	return ret;
+}
+
 int cmd_provenance(int argc,
 		   const char **argv,
 		   const char *prefix,
@@ -352,6 +473,7 @@ int cmd_provenance(int argc,
 		PROVENANCE_VERIFY_USAGE,
 		PROVENANCE_ADOPT_USAGE,
 		PROVENANCE_PURGE_USAGE,
+		PROVENANCE_STAT_USAGE,
 		NULL,
 	};
 	parse_opt_subcommand_fn *fn = NULL;
@@ -360,6 +482,7 @@ int cmd_provenance(int argc,
 		OPT_SUBCOMMAND("verify", &fn, cmd_provenance_verify),
 		OPT_SUBCOMMAND("adopt", &fn, cmd_provenance_adopt),
 		OPT_SUBCOMMAND("purge", &fn, cmd_provenance_purge),
+		OPT_SUBCOMMAND("stat", &fn, cmd_provenance_stat),
 		OPT_END(),
 	};
 

@@ -478,6 +478,7 @@ libgit_sources = [
   'provenance-journal.c',
   'provenance-patch.c',
   'provenance-purge.c',
+  'provenance-stat.c',
   'provenance-transfer.c',
   'provenance-view.c',
   'prune-packed.c',
