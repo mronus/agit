@@ -597,10 +597,13 @@ commit of that command.  With `--amend`, it unites them with those of
 without it, it carries them as a cherry-pick does.
 
 A commit also carries the records of the commits that `git cherry-pick
---no-commit` applied since the previous commit, after those named
-above, unless it concludes a revert.  The reasoning of such a commit
-is attached only if a line is taken from it, as its changes may have
-been discarded.  Every commit forgets these picks, as it empties the
+--no-commit` applied and that `git revert --no-commit` reverted since
+the previous commit, after those named above, each as a cherry-pick
+or a revert of it would, in the order in which they were applied.  A
+commit that concludes such a revert takes the reverted commits from
+this list alone.  The reasoning of a picked commit is attached only if
+a line is taken from it, as its changes may have been discarded.
+Every commit forgets these picks and reverts, as it empties the
 capture journal.
 
 A commit that concludes a merge (see linkgit:git-merge[1]) records

@@ -6,7 +6,6 @@
 #include "hex.h"
 #include "lockfile.h"
 #include "odb.h"
-#include "oid-array.h"
 #include "odb/transaction.h"
 #include "path.h"
 #include "pathspec.h"
@@ -187,7 +186,7 @@ out:
 }
 
 int provenance_picks_append(struct repository *r,
-			    const struct object_id *oid)
+			    const struct object_id *oid, int revert)
 {
 	struct lock_file lk = LOCK_INIT, picks_lk = LOCK_INIT;
 	struct strbuf line = STRBUF_INIT;
@@ -199,7 +198,8 @@ int provenance_picks_append(struct repository *r,
 	    repo_hold_lock_file_for_update(r, &picks_lk, path,
 					   LOCK_REPORT_ON_ERROR) < 0)
 		goto out;
-	strbuf_add_oid_hex(&line, oid);
+	strbuf_addf(&line, "%s %s", revert ? "revert" : "pick",
+		    oid_to_hex(oid));
 	ret = append_line(&picks_lk, path, &line);
 
 out:
@@ -242,7 +242,8 @@ out:
 	return ret;
 }
 
-int provenance_picks_read(struct repository *r, struct oid_array *picks)
+int provenance_picks_read(struct repository *r,
+			  struct provenance_picks *picks)
 {
 	struct strbuf buf = STRBUF_INIT;
 	char *path = repo_git_path(r, "provenance/picks");
@@ -257,25 +258,39 @@ int provenance_picks_read(struct repository *r, struct oid_array *picks)
 
 	for (line = buf.buf; line < buf.buf + buf.len; line = next) {
 		struct object_id oid;
-		const char *end;
+		const char *p, *end;
+		int revert = 0;
 
 		next = strchrnul(line, '\n');
 		if (*next)
 			*next++ = '\0';
 		lineno++;
-		if (parse_oid_hex_algop(line, &oid, &end, r->hash_algo) ||
+		if (skip_prefix(line, "revert ", &p))
+			revert = 1;
+		else if (!skip_prefix(line, "pick ", &p))
+			p = line;
+		if (parse_oid_hex_algop(p, &oid, &end, r->hash_algo) ||
 		    *end) {
 			warning(_("ignoring malformed line %d in '%s'"),
 				lineno, path);
 			continue;
 		}
-		oid_array_append(picks, &oid);
+		ALLOC_GROW(picks->items, picks->nr + 1, picks->alloc);
+		oidcpy(&picks->items[picks->nr].oid, &oid);
+		picks->items[picks->nr].revert = revert;
+		picks->nr++;
 	}
 
 out:
 	strbuf_release(&buf);
 	free(path);
 	return ret;
+}
+
+void provenance_picks_release(struct provenance_picks *picks)
+{
+	FREE_AND_NULL(picks->items);
+	picks->nr = picks->alloc = 0;
 }
 
 /*

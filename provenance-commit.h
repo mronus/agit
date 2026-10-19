@@ -1,7 +1,7 @@
 #ifndef PROVENANCE_COMMIT_H
 #define PROVENANCE_COMMIT_H
 
-#include "oid-array.h"
+#include "provenance-journal.h"
 
 struct commit;
 struct commit_list;
@@ -30,11 +30,11 @@ struct provenance_rewrite {
 	struct commit *pick;
 	unsigned revert : 1;
 	/*
-	 * The commits that "cherry-pick --no-commit" applied before the
-	 * commit was made (see provenance_picks_read()), oldest first;
-	 * not with `revert`.
+	 * The commits that "cherry-pick --no-commit" applied, or that
+	 * "revert --no-commit" undid, before the commit was made (see
+	 * provenance_picks_read()), oldest first.
 	 */
-	struct oid_array picks;
+	struct provenance_picks picks;
 	/*
 	 * The commit being made, if "git am" made it from a patch mail,
 	 * or NULL; not with the others.  Its changes are owned as
@@ -56,10 +56,11 @@ struct provenance_rewrite {
  * provenance_attribute(), which also says what is recorded for a merge.
  *
  * The sources of the commit are `amend`, `pick` and the `picks`, in
- * that order, each named once (see provenance_attribute_rewrite()).
- * The `picks` are tentative sources, as they may name commits whose
- * changes were discarded before the commit was made.  A pick that is
- * not a commit is ignored with a warning.  With `mail`, the commit is
+ * that order, each named once (see provenance_attribute_rewrite()),
+ * with `revert` for `pick` and for each of the `picks` that is a
+ * revert.  The `picks` are tentative sources, as they may name commits
+ * whose changes were discarded before the commit was made.  A pick
+ * that is not a commit is ignored with a warning.  With `mail`, the commit is
  * its own source, with the line record `mail_lines` and no reasoning
  * record.
  *

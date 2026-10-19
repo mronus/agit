@@ -66,17 +66,23 @@ static int read_source(struct repository *r, struct commit *commit,
 	return ret;
 }
 
-/* Add `commit` to `sources`, unless it is there already. */
+/*
+ * Add `commit` to `sources`, picked or reverted as `revert` says,
+ * unless it is there already as such.
+ */
 static void add_source(struct provenance_source **sources, size_t *nr,
-		       size_t *alloc, struct commit *commit, int tentative)
+		       size_t *alloc, struct commit *commit, int tentative,
+		       int revert)
 {
 	for (size_t i = 0; i < *nr; i++)
-		if ((*sources)[i].commit == commit)
+		if ((*sources)[i].commit == commit &&
+		    (*sources)[i].revert == !!revert)
 			return;
 	ALLOC_GROW(*sources, *nr + 1, *alloc);
 	memset(&(*sources)[*nr], 0, sizeof(**sources));
 	(*sources)[*nr].commit = commit;
 	(*sources)[*nr].tentative = tentative;
+	(*sources)[*nr].revert = !!revert;
 	(*nr)++;
 }
 
@@ -100,25 +106,26 @@ int provenance_commit_records(struct repository *r,
 	char *human = NULL;
 	int ret = 0;
 
-	if (rw && rw->revert && (rw->amend || !rw->pick || rw->picks.nr))
+	if (rw && rw->revert && (rw->amend || !rw->pick))
 		BUG("provenance: a revert must have a pick and no amend");
 	if (rw && rw->mail && (rw->amend || rw->pick || rw->picks.nr))
 		BUG("provenance: a mail must be the only source");
 	if (rw && rw->mail)
-		add_source(&sources, &nr, &alloc, rw->mail, 0);
+		add_source(&sources, &nr, &alloc, rw->mail, 0, 0);
 	if (rw && rw->amend)
-		add_source(&sources, &nr, &alloc, rw->amend, 0);
+		add_source(&sources, &nr, &alloc, rw->amend, 0, 0);
 	if (rw && rw->pick)
-		add_source(&sources, &nr, &alloc, rw->pick, 0);
+		add_source(&sources, &nr, &alloc, rw->pick, 0, rw->revert);
 	for (size_t i = 0; rw && i < rw->picks.nr; i++) {
-		const struct object_id *oid = &rw->picks.oid[i];
-		struct commit *c = lookup_commit_reference_gently(r, oid, 1);
+		const struct provenance_pick *pick = &rw->picks.items[i];
+		struct commit *c = lookup_commit_reference_gently(r, &pick->oid,
+								  1);
 
 		if (!c)
 			warning(_("ignoring the pick %s: not a commit"),
-				oid_to_hex(oid));
+				oid_to_hex(&pick->oid));
 		else
-			add_source(&sources, &nr, &alloc, c, 1);
+			add_source(&sources, &nr, &alloc, c, 1, pick->revert);
 	}
 
 	/* the changes of a commit without a line record are UNKNOWN */
@@ -156,8 +163,6 @@ int provenance_commit_records(struct repository *r,
 
 	if (rw && rw->amend)
 		flags |= PROVENANCE_REWRITE_AMEND;
-	if (rw && rw->revert)
-		flags |= PROVENANCE_REWRITE_REVERT;
 	if (provenance_journal_read(r, &journal) ||
 	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
 					 flags, &journal, session,

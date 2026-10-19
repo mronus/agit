@@ -3,7 +3,6 @@
 
 #include "hash.h"
 
-struct oid_array;
 struct pathspec;
 struct repository;
 struct strbuf;
@@ -88,14 +87,31 @@ int provenance_journal_clear(struct repository *r);
 
 /*
  * The picks of a worktree are the commits that "cherry-pick
- * --no-commit" applied to it since the last commit, whose records the
- * next commit carries over.  They are listed in
- * "$GIT_DIR/provenance/picks", next to the journal, one full object
- * id per line, and removed with the journal.
- *
+ * --no-commit" applied to it, or that "revert --no-commit" undid,
+ * since the last commit, whose records the next commit carries over.
+ * They are listed in "$GIT_DIR/provenance/picks", next to the journal,
+ * one per line, as "pick <oid>" or "revert <oid>" with a full object
+ * id, and removed with the journal.  A line with an object id alone
+ * reads as a pick.
+ */
+struct provenance_pick {
+	struct object_id oid;
+	/* the commit was reverted, not picked */
+	unsigned revert : 1;
+};
+
+struct provenance_picks {
+	struct provenance_pick *items;
+	size_t nr, alloc;
+};
+
+#define PROVENANCE_PICKS_INIT { 0 }
+
+/*
  * provenance_picks_append() appends `oid` to the picks of the current
- * worktree of `r`, holding the journal's lock while doing so.  Returns
- * 0 on success, or -1 after reporting an error.
+ * worktree of `r`, as a revert if `revert` is set, holding the
+ * journal's lock while doing so.  Returns 0 on success, or -1 after
+ * reporting an error.
  *
  * provenance_picks_read() appends the picks of the current worktree of
  * `r` to `picks`, in the order in which they were made.  A missing
@@ -104,8 +120,10 @@ int provenance_journal_clear(struct repository *r);
  * cannot be read.
  */
 int provenance_picks_append(struct repository *r,
-			    const struct object_id *oid);
-int provenance_picks_read(struct repository *r, struct oid_array *picks);
+			    const struct object_id *oid, int revert);
+int provenance_picks_read(struct repository *r,
+			  struct provenance_picks *picks);
+void provenance_picks_release(struct provenance_picks *picks);
 
 /*
  * Read the journal of the current worktree of `r` into `j`, which

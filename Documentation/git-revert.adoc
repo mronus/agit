@@ -171,6 +171,13 @@ and is not copied; the revert gets a reasoning record only from the
 stamps it uses (see linkgit:git-stamp[1]), like any commit.  The lines
 that a revert of a commit without a line record removes are `UNKNOWN`.
 
+With `--no-commit`, the reverted commits are noted in the git
+directory, next to those that `git cherry-pick --no-commit` applied,
+and the next commit carries their records as if each had been
+reverted in turn (see linkgit:git-commit[1]).  A reverted change that
+has been discarded by then, as with `git reset --hard`, lends nothing
+to the new commit.
+
 CONFIGURATION
 -------------
 

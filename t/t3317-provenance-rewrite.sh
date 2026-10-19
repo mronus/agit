@@ -633,7 +633,7 @@ test_expect_success 'commit --amend at a conflicting squash carries its records'
 test_expect_success 'cherry-pick -n records its picks for the next commit' '
 	git checkout -b pick-n shift &&
 	git cherry-pick -n ai &&
-	git rev-parse ai >expect &&
+	echo "pick $(git rev-parse ai)" >expect &&
 	test_cmp expect .git/provenance/picks &&
 	git commit -m picked-n &&
 	same_records picked HEAD &&
@@ -674,7 +674,7 @@ test_expect_success 'several cherry-pick -n are carried by one commit' '
 test_expect_success 'a conflicting cherry-pick -n resolved by hand and by a session' '
 	git checkout -b pick-n-conflict tri &&
 	test_must_fail git cherry-pick -n ai &&
-	git rev-parse ai >expect &&
+	echo "pick $(git rev-parse ai)" >expect &&
 	test_cmp expect .git/provenance/picks &&
 	test_write_lines 0 1 2 three-ish 4 5 6 7 8 9 10 11 >file &&
 	git stamp begin --session s2 &&
@@ -765,6 +765,122 @@ test_expect_success 'stamps do not consume the picks' '
 test_expect_success 'cherry-pick -n records no picks when provenance is disabled' '
 	git checkout -b pick-n-disabled shift &&
 	git -c provenance.enabled=false cherry-pick -n ai &&
+	test_path_is_missing .git/provenance/picks &&
+	git reset --hard
+'
+
+test_expect_success 'setup commits that drop the lines of a session' '
+	git checkout -b drops ai &&
+	test_write_lines 1 2 4 5 6 7 8 9 10 11 >file &&
+	git commit -a -m drop-three &&
+	git tag drop-three &&
+	test_write_lines 1 2 4 5 6 7 8 9 10 >file &&
+	git commit -a -m drop-eleven &&
+	git tag drop-eleven &&
+
+	git checkout -b twelve ai &&
+	git stamp begin --session s2 &&
+	echo 12 >>file &&
+	git stamp end --session s2 &&
+	echo "Twelfth summary." | git stamp reason --session s2 --summary - &&
+	git commit -a -m twelve --session s2 &&
+	git tag twelve
+'
+
+test_expect_success 'several revert -n are carried by one commit' '
+	git checkout -b revert-n-two drop-eleven &&
+	git revert -n drop-eleven drop-three &&
+	{
+		echo "revert $(git rev-parse drop-eleven)" &&
+		echo "revert $(git rev-parse drop-three)"
+	} >expect &&
+	test_cmp expect .git/provenance/picks &&
+	git commit -m reverted-two &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
+		echo "+ 11 AI s1 $(anchor HEAD file 11)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'cherry-pick -n and revert -n are carried by one commit' '
+	git checkout -b pick-revert-n drop-three &&
+	git cherry-pick -n twelve &&
+	git revert -n drop-three &&
+	{
+		echo "pick $(git rev-parse twelve)" &&
+		echo "revert $(git rev-parse drop-three)"
+	} >expect &&
+	test_cmp expect .git/provenance/picks &&
+	git commit -m picked-reverted &&
+	{
+		header HEAD &&
+		echo "$s1_actor" &&
+		echo "$s2_actor" &&
+		echo "file file" &&
+		echo "+ 3 AI s1 $(anchor HEAD file 3)" &&
+		echo "+ 12 AI s2 $(anchor HEAD file 12)"
+	} >expect &&
+	check_lines HEAD &&
+	git provenance show --reasoning twelve >old.out &&
+	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
+	check_reasoning HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'a conflicting revert -n resolved by hand' '
+	git checkout -b revert-n-conflict ai &&
+	test_write_lines 1 2 drei 4 5 6 7 8 9 10 11 >file &&
+	git commit -a -m drei &&
+	test_must_fail git revert -n ai &&
+	echo "revert $(git rev-parse ai)" >expect &&
+	test_cmp expect .git/provenance/picks &&
+	test_write_lines 1 2 3 4 5 6 7 8 9 10 >file &&
+	git add file &&
+	git commit -m resolved-revert-n &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "$s1_actor" &&
+		echo "file file" &&
+		echo "+ 3 HUMAN human $(anchor HEAD file 3)" &&
+		echo "- 3 MIXED human,s1 $(anchor HEAD^ file 3)" &&
+		echo "- 11 AI s1 $(anchor HEAD^ file 11)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	git provenance verify HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'a revert -n that was discarded lends nothing' '
+	git checkout -b revert-n-stale drop-three &&
+	git revert -n drop-three &&
+	git reset --hard &&
+	echo unrelated >other &&
+	git add other &&
+	git commit -m unrelated &&
+	{
+		header HEAD &&
+		echo "$human_actor" &&
+		echo "file other" &&
+		echo "+ 1 HUMAN human $(anchor HEAD other 1)"
+	} >expect &&
+	check_lines HEAD &&
+	test_must_fail git provenance show --reasoning HEAD &&
+	test_path_is_missing .git/provenance/picks
+'
+
+test_expect_success 'revert -n records nothing when provenance is disabled' '
+	git checkout -b revert-n-disabled drop-three &&
+	git -c provenance.enabled=false revert -n drop-three &&
 	test_path_is_missing .git/provenance/picks &&
 	git reset --hard
 '
