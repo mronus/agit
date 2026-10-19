@@ -723,6 +723,36 @@ an adopted record; merge commits are not adopted.
 Adopting is an explicit action, like `verify`, and does not depend on
 `provenance.enabled`.
 
+An import of an edited `fast-export` stream makes commits with new
+ids whose records do exist, keyed by the old ids (see "Maintenance").
+Only the importing side knows which old commit each new one replaces:
+the marks files that `fast-export --export-marks` and `fast-import
+--export-marks` write give each commit of the stream the same mark,
+and joining them yields the map. `git provenance remap` reads that map
+as pairs of old and new ids and carries the records over, pair by
+pair:
+
+1. A line record that `verify` accepts for the new commit is moved as
+   it is, with its `commit` line rewritten. This is the common case,
+   where the stream changed messages, committers or encodings but no
+   tree.
+
+2. Otherwise the changes differ, and the old record is located in the
+   new commit as `am` locates a mailed record (see "History
+   rewriting"): the commit is its own source, with that record. The
+   lines that no located range covers are `UNKNOWN`, as for `adopt`,
+   since nothing observed them, and the record is marked `adopted`.
+
+3. The reasoning record is moved as it is, with its `commit` line
+   rewritten.
+
+A pair whose new id is not a commit, or whose new commit has a line
+record already, is skipped with a warning; `prune` removes the
+records left behind once their commits are gone. The old keys are
+removed, and all the moves of a run are written as one notes commit
+on top of each provenance ref, in one ref transaction: this is
+ordinary history of the refs, not a rewrite as `purge` makes.
+
 Transfer
 ~~~~~~~~
 The provenance refs of a remote are fetched into tracking refs, as
@@ -874,8 +904,12 @@ blob.
 Maintenance
 ~~~~~~~~~~~
 - `gc` needs no change: everything is reachable from
-  `refs/provenance/*`. Records whose code commit is no longer
-  reachable can optionally be pruned, as `git notes prune` does.
+  `refs/provenance/*`. The records of commits that `gc` has removed,
+  or that an import replaced under ids that `remap` was not given,
+  stay keyed by ids that name no object. `provenance prune` removes
+  them, deciding as `git notes prune` does: a commit that exists but
+  is unreachable keeps its records. It writes one notes commit on top
+  of each ref, in one ref transaction, as `remap` does.
 
 - `provenance verify` is the `fsck` of provenance.
 
@@ -892,7 +926,10 @@ Maintenance
   they only describe the imported commits if the stream keeps the
   ids: an import that changes them, as with `--reencode=yes` or an
   edited stream (`filter-repo`), leaves the records attached to the
-  old ids, where no commit uses them. The notes
+  old ids, where no commit uses them. `git provenance remap` carries
+  them over along the map that the marks files of the export and of
+  the import give (see "Re-anchoring"), and `provenance prune` removes
+  those of the commits that are gone. The notes
   commits of the provenance refs carry an `encoding` header when
   `i18n.commitEncoding` is set, as those of `git notes` do, so
   `fast-export` needs `--reencode` for them as for the other commits.
