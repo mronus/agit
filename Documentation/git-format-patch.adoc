@@ -726,7 +726,6 @@ This should help you to submit patches inline using KMail.
 5. Back in the compose window: add whatever other text you wish to the
    message, complete the addressing and subject fields, and press send.
 
-[[BASE_TREE_INFORMATION]]
 [[PROVENANCE]]
 PROVENANCE
 ----------
@@ -768,6 +767,7 @@ letter and the patch of a commit without a line record.  The reasoning
 record of a commit, which says why it was made, is not carried by
 mail.
 
+[[BASE_TREE_INFORMATION]]
 BASE TREE INFORMATION
 ---------------------
 
