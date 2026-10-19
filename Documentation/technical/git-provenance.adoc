@@ -861,6 +861,24 @@ carry an `.agit.<n>` suffix (`git version 2.56.0.agit.1`). The release
 and tagging convention is described in the repository's README and in
 linkgit:git[1].
 
+Testing
+-------
+The upstream test suite runs twice in CI. The ordinary jobs run it
+with provenance off (`GIT_TEST_PROVENANCE=false`, the test suite's
+default), which keeps the guarantee that agit behaves as stock Git
+does. The `linux-provenance` job runs it with provenance on, as users
+get it, so that the upstream tests exercise the provenance code under
+every stock command. Tests that only expect what stock Git prints or
+stores are skipped in that job through `GIT_SKIP_TESTS`: those that
+see the `advice.provenanceSession` hint on stderr, list refs and see
+the provenance refs, walk all refs and see the provenance notes
+commits, count objects, packs or commits and count the records too,
+or delete objects that the provenance refs point to. The list and the
+reason for each entry are in `ci/run-build-and-tests.sh`; the upstream
+test scripts are not changed. A failure for any other reason is a bug
+in the extension and is fixed, with a test in the provenance scripts
+(t3312 to t3318), which run in both kinds of jobs.
+
 Integrity
 ---------
 Git protects history with the hash chain and optional signatures, and
@@ -990,8 +1008,8 @@ Each step is implemented and reviewed on its own:
    (b) transfer: a per-remote opt-out, `remote prune`, `remove` and
    `rename` of the tracking refs, the tracking refs after a push, and
    pushes that hooks reject (done);
-   (c) a CI job running selected upstream suites with provenance
-   enabled, and the fixes it needs;
+   (c) a CI job running the upstream suite with provenance enabled,
+   and the fixes it needs (done);
    (d) `format-patch`/`am` and `fast-export`/`fast-import`;
    (e) `purge`;
    (f) the query cache and repository-wide queries;
