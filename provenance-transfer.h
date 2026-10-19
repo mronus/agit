@@ -24,8 +24,11 @@ struct repository;
  * only if "provenance.reasoning.fetch" is "always".  A provenance ref
  * that is already mapped by `cmdline` (the refspecs given on the
  * command line, if any) or by the configured refspecs of `remote`,
- * as a mirror refspec maps it, is left out.  The refspecs name the
- * refs exactly: a caller must allow them to be missing on the remote.
+ * as a mirror refspec maps it, is left out.  Nothing is appended if
+ * `cmdline` only names object ids to fetch without storing them in
+ * refs, as the lazy fetch of a partial clone does: such a fetch
+ * updates no refs.  The refspecs name the refs exactly: a caller must
+ * allow them to be missing on the remote.
  */
 void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
 			       struct refspec *cmdline, struct refspec *out);
