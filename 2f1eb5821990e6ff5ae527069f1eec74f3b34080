@@ -1,0 +1,7 @@
+version 1
+commit 2f1eb5821990e6ff5ae527069f1eec74f3b34080
+capture observed git/2.56.0.agit.2
+actor 683d44a8-1e69-4001-a42d-411f2e7d0951 ai model=claude-opus-5-5 tool=claude-code session=683d44a8-1e69-4001-a42d-411f2e7d0951 source=observed
+file README.md
++ 4-5 AI 683d44a8-1e69-4001-a42d-411f2e7d0951 910cc1e8ab4c358d99c3ffd3770d363200d6fce1
+- 4-17 AI 683d44a8-1e69-4001-a42d-411f2e7d0951 2ae74daf5f703b783d6779182a19d7e4692fb233
