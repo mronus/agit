@@ -20,6 +20,7 @@
 #include "dir.h"
 #include "entry.h"
 #include "preload-index.h"
+#include "provenance-journal.h"
 #include "read-cache.h"
 #include "repository.h"
 #include "rerere.h"
@@ -306,11 +307,15 @@ static int get_stash_info(struct stash_info *info, int argc, const char **argv)
 static int do_clear_stash(void)
 {
 	struct object_id obj;
+	int ret;
+
 	if (repo_get_oid(the_repository, ref_stash, &obj))
 		return 0;
 
-	return refs_delete_ref(get_main_ref_store(the_repository), NULL,
-			       ref_stash, &obj, 0);
+	ret = refs_delete_ref(get_main_ref_store(the_repository), NULL,
+			      ref_stash, &obj, 0);
+	provenance_journal_stash_prune(the_repository);
+	return ret;
 }
 
 static int clear_stash(int argc, const char **argv, const char *prefix,
@@ -707,6 +712,10 @@ restore_untracked:
 	if (info->has_u && restore_untracked(&info->u_tree))
 		ret = error(_("could not restore untracked files from stash"));
 
+	/* the stamps of the changes come back with them */
+	if (!ret)
+		provenance_journal_unstash(the_repository, &info->w_commit);
+
 	if (!quiet) {
 		struct child_process cp = CHILD_PROCESS_INIT;
 
@@ -794,6 +803,8 @@ static int do_drop_stash(struct stash_info *info, int quiet)
 
 	if (reflog_is_empty(ref_stash))
 		do_clear_stash();
+	else
+		provenance_journal_stash_prune(the_repository);
 
 	return 0;
 }
@@ -1709,6 +1720,7 @@ static int do_push_stash(const struct pathspec *ps, const char *stash_msg, int q
 			fprintf_ln(stderr, _("Cannot save the current status"));
 		goto done;
 	}
+	provenance_journal_stash_prune(the_repository);
 
 	if (!quiet)
 		printf_ln(_("Saved working directory and index state %s"),
@@ -1782,6 +1794,13 @@ static int do_push_stash(const struct pathspec *ps, const char *stash_msg, int q
 				ret = -1;
 				goto done;
 			}
+			/*
+			 * The stamps describe changes that are no longer
+			 * in the working tree: they go with the stash.
+			 */
+			if (keep_index != 1)
+				provenance_journal_stash(the_repository,
+							 &info.w_commit);
 		}
 
 		/*

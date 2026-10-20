@@ -35,11 +35,17 @@ struct repository;
  * no session if no session is attached to the commit.  Stamps whose
  * objects are missing are skipped with a warning.  Returns 0 on
  * success, or -1 after reporting an error.
+ *
+ * The stamps are used by the commit that HEAD pointed at when they
+ * were made: those taken on the commit HEAD points at now make the
+ * chain of versions of each file, and the others are located by
+ * content.  The entries of `journal` are marked as foreign, crossing
+ * and used accordingly (see struct provenance_journal_entry).
  */
 int provenance_attribute(struct repository *r,
 			 const struct commit_list *parents,
 			 const struct object_id *tree,
-			 const struct provenance_journal *journal,
+			 struct provenance_journal *journal,
 			 const char *session,
 			 const char *human,
 			 struct provenance_record *lines,
@@ -120,7 +126,7 @@ int provenance_attribute_rewrite(struct repository *r,
 				 const struct object_id *tree,
 				 const struct provenance_source *sources,
 				 size_t nr, unsigned flags,
-				 const struct provenance_journal *journal,
+				 struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,
 				 struct provenance_record *lines,
@@ -150,7 +156,7 @@ struct provenance_attribution;
 struct provenance_attribution *
 provenance_attribution_new(struct repository *r, const struct object_id *base,
 			   const struct commit_list *others,
-			   const struct provenance_journal *journal);
+			   struct provenance_journal *journal);
 int provenance_attribute_path(struct provenance_attribution *pa,
 			      const char *path, const char *buf, size_t len,
 			      unsigned mode, struct provenance_record *lines);

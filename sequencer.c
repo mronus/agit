@@ -1574,6 +1574,7 @@ static int try_to_commit(struct repository *r,
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 	int record_provenance = provenance_enabled(r);
 	char *amend_author = NULL;
 	const char *committer = NULL;
@@ -1735,7 +1736,8 @@ static int try_to_commit(struct repository *r,
 			prov_rw.amend = current_head;
 		if (provenance_commit_records(r, parents, &tree,
 				author ? author : git_author_info(IDENT_STRICT),
-				NULL, &prov_rw, &prov_lines, &prov_reasoning)) {
+				NULL, &prov_rw, &prov_journal, &prov_lines,
+				&prov_reasoning)) {
 			res = error(_("unable to record provenance"));
 			goto out;
 		}
@@ -1757,8 +1759,8 @@ static int try_to_commit(struct repository *r,
 	ref_transaction_free(transaction);
 
 	/* The commit has consumed the journal, as a full commit does. */
-	if (record_provenance && provenance_journal_clear(r))
-		warning_errno(_("unable to clear the provenance journal"));
+	if (record_provenance)
+		provenance_journal_consume(r, &prov_journal, oid, 0);
 
 	run_commit_hook(0, r->index_file, NULL, "post-commit", NULL);
 	if (flags & AMEND_MSG)
@@ -1767,6 +1769,7 @@ static int try_to_commit(struct repository *r,
 out:
 	provenance_record_release(&prov_lines);
 	provenance_reasoning_release(&prov_reasoning);
+	provenance_journal_release(&prov_journal);
 	free_commit_extra_headers(extra);
 	commit_list_free(parents);
 	strbuf_release(&err);

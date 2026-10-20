@@ -92,6 +92,7 @@ int provenance_commit_records(struct repository *r,
 			      const char *author,
 			      const char *session,
 			      const struct provenance_rewrite *rw,
+			      struct provenance_journal *journal,
 			      struct provenance_record *lines,
 			      struct provenance_reasoning *reasoning)
 {
@@ -99,7 +100,7 @@ int provenance_commit_records(struct repository *r,
 	struct provenance_reasoning *reasonings = NULL;
 	struct provenance_source *sources = NULL;
 	size_t alloc = 0;
-	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
+	struct provenance_journal own = PROVENANCE_JOURNAL_INIT;
 	struct ident_split ident;
 	size_t nr = 0;
 	unsigned flags = 0;
@@ -110,6 +111,8 @@ int provenance_commit_records(struct repository *r,
 		BUG("provenance: a revert must have a pick and no amend");
 	if (rw && rw->mail && (rw->amend || rw->pick || rw->picks.nr))
 		BUG("provenance: a mail must be the only source");
+	if (!journal)
+		journal = &own;
 	if (rw && rw->adopt && !rw->mail)
 		BUG("provenance: only a mail can be adopted");
 	if (rw && rw->mail)
@@ -168,9 +171,9 @@ int provenance_commit_records(struct repository *r,
 	if (rw && rw->adopt)
 		flags |= PROVENANCE_REWRITE_ADOPT;
 	if ((!(flags & PROVENANCE_REWRITE_ADOPT) &&
-	     provenance_journal_read(r, &journal)) ||
+	     provenance_journal_read(r, journal)) ||
 	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
-					 flags, &journal, session,
+					 flags, journal, session,
 					 human, lines, reasoning))
 		ret = -1;
 
@@ -182,7 +185,7 @@ out:
 	free(records);
 	free(reasonings);
 	free(sources);
-	provenance_journal_release(&journal);
+	provenance_journal_release(&own);
 	free(human);
 	return ret;
 }

@@ -1735,6 +1735,7 @@ static void do_commit(const struct am_state *state)
 	struct strbuf sb = STRBUF_INIT;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 	int record_provenance = provenance_enabled(the_repository) &&
 				(!state->rebasing ||
 				 !is_null_oid(&state->orig_commit));
@@ -1801,7 +1802,8 @@ static void do_commit(const struct am_state *state)
 		}
 		if (provenance_commit_records(the_repository,
 				parents, &tree, author,
-				NULL, &rw, &prov_lines, &prov_reasoning))
+				NULL, &rw, &prov_journal, &prov_lines,
+				&prov_reasoning))
 			die(_("unable to record provenance"));
 		provenance_record_release(&mailed);
 	}
@@ -1837,8 +1839,9 @@ static void do_commit(const struct am_state *state)
 	}
 
 	/* The commit has consumed the journal, as a full commit does. */
-	if (record_provenance && provenance_journal_clear(the_repository))
-		warning_errno(_("unable to clear the provenance journal"));
+	if (record_provenance)
+		provenance_journal_consume(the_repository, &prov_journal,
+					   &commit, 0);
 
 	if (state->rebasing) {
 		FILE *fp = xfopen(am_path(state, "rewritten"), "a");
@@ -1853,6 +1856,7 @@ static void do_commit(const struct am_state *state)
 
 	provenance_record_release(&prov_lines);
 	provenance_reasoning_release(&prov_reasoning);
+	provenance_journal_release(&prov_journal);
 	commit_list_free(parents);
 	strbuf_release(&sb);
 }

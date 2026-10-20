@@ -378,19 +378,23 @@ made; a writer holds `$GIT_DIR/provenance/journal.lock` while it adds
 an entry.
 
 ------------
-begin <ts> <session> <tree> [model=<model>] [tool=<tool>]
-end <ts> <session> <tree>
-edit <ts> <session> <pre-blob> <post-blob> <path>
-reason <ts> <session> <summary-blob> [<transcript-blob>]
-claim <ts> <session> path <path>
-claim <ts> <session> patch <patch-blob>
+begin <ts> <session> [head=<head>] <tree> [model=<model>] [tool=<tool>]
+end <ts> <session> [head=<head>] <tree>
+edit <ts> <session> [head=<head>] <pre-blob> <post-blob> <path>
+reason <ts> <session> [head=<head>] <summary-blob> [<transcript-blob>]
+claim <ts> <session> [head=<head>] path <path>
+claim <ts> <session> [head=<head>] patch <patch-blob>
 ------------
 
 Fields are separated by a single space.  `<ts>` is the time of the
 stamp, in seconds since the Unix epoch.  `<session>` identifies the
 agent session that made the stamp; it is a non-empty string of the
-characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`.  `<model>` and
-`<tool>` are non-empty and contain no spaces.  A `<path>` is relative
+characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`.  `<head>` is
+the commit that HEAD pointed at when the stamp was made; it is left
+out if HEAD was on an unborn branch.  Entries written by versions that
+did not record it have no `<head>` either; no other field that follows
+the session id starts with `head=`, so the two forms cannot be
+confused.  `<model>` and `<tool>` are non-empty and contain no spaces.  A `<path>` is relative
 to the top of the working tree and is always the last field, so it may
 contain spaces; paths that contain a LF cannot be recorded.  Object ids
 are written in full, as lowercase hexadecimal, in the hash algorithm of
@@ -430,14 +434,56 @@ prune them; a reader must treat entries whose objects are missing as
 having no content.  A reader ignores lines that do not parse, with a
 warning.
 
+An entry was taken on the commit that HEAD points at while a commit
+is made (for `git commit --amend`, the commit being amended) if its
+`<head>` names that commit or it has no `<head>`; any other entry is
+foreign.  The `begin` and the `end` of an interval are paired as for
+the attribution, the `end` with the latest `begin` of its session
+before it; if their `<head>` fields name different commits, HEAD
+moved during the interval, and both entries are ignored.  If only one
+of them has a `<head>`, it decides for both.
+
 `git commit` consumes the journal: after it has recorded the
-provenance of a commit, it removes the journal while holding the lock.
-A partial commit, made with a pathspec, `--only` or `--include`, keeps
-the journal, as its stamps may be needed for the paths left out.  Any
-other commit consumes all the stamps, including those for changes it
-does not include, such as changes left unstaged by `git add -p`; lines
-from those changes are `HUMAN` when they are committed later.  The
-commit skips entries whose objects are missing with a warning.
+provenance of a commit, it rewrites the journal while holding the
+lock, without the entries it consumed, and removes it if no entry is
+left.  Entries appended while the commit was made are kept.
+
+- A partial commit, made with a pathspec, `--only` or `--include`,
+  keeps the entries taken on HEAD, as they may be needed for the paths
+  left out, with the new commit as their `<head>`: the paths left out
+  are as they were.  Any other commit consumes them all, including
+  those for changes it does not include, such as changes left
+  unstaged by `git add -p`; lines from those changes are `HUMAN` when
+  they are committed later.
+
+- The entries of an interval during which HEAD moved are dropped.
+
+- A commit that is not partial consumes the foreign entries it used:
+  the `begin` and `end` entries of an interval and the `edit` entries
+  that gave a line of the commit to their session, and the `reason`
+  and `claim ... patch` entries of the sessions attached to the
+  commit.  The other foreign entries stay, to be used once HEAD is
+  back on their commit, unless no branch (`refs/heads/*`) reaches the
+  commit that their `<head>` names: such entries are dropped.  This is
+  only checked when foreign entries are left, with the reachability
+  helpers that a commit-graph speeds up.
+
+The commit skips entries whose objects are missing with a warning.
+
+A `git stash push` that removes all the changes from the working
+tree, one without a pathspec, `--patch`, `--keep-index` or
+`--staged`, takes the journal with it, as its stamps describe changes
+that are no longer there.  It moves the journal, entries unchanged, to
+`provenance/stash/<stash>` in the common git directory, where
+`<stash>` is the full object id of the stash commit: like `refs/stash`,
+these files are shared by all worktrees.  `git stash apply`, `pop` and
+`branch`, once the stash applied without conflicts, append the
+entries of its file to the journal of the current worktree, where they
+are foreign if HEAD is on another commit than the one they were taken
+on.  A file whose stash commit the reflog of `refs/stash` does not
+name, as after `git stash pop`, `drop` or `clear`, is removed by the
+next `git stash push`, `pop`, `drop` or `clear`.  Other stashes leave
+the journal alone.
 
 Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
 that `git cherry-pick --no-commit` applied and `git revert
@@ -457,8 +503,8 @@ reverted, each with its full object id; a line holding an object id
 alone is a `pick`.  `cherry-pick`, `revert` and `merge` append to it
 while holding `$GIT_DIR/provenance/journal.lock`, and only when
 provenance is enabled.  A reader ignores lines that do not parse, with
-a warning.  The commits that remove the journal remove
-this file with it, and only they: `git stamp` leaves it alone.  Like
+a warning.  The commits that consume the journal, unless they are
+partial, remove this file, and only they: `git stamp` leaves it alone.  Like
 the journal, it is never transferred.
 
 

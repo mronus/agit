@@ -448,6 +448,7 @@ static void finish_up_to_date(void)
  */
 static struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 static struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+static struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 static int record_provenance;
 
 /*
@@ -465,7 +466,8 @@ static void compute_provenance(const struct commit_list *parents,
 	/* the author that commit_tree() will give the commit */
 	author = xstrdup(git_author_info(IDENT_STRICT));
 	if (provenance_commit_records(the_repository, parents, tree, author,
-				      NULL, NULL, &prov_lines, &prov_reasoning))
+				      NULL, NULL, &prov_journal, &prov_lines,
+				      &prov_reasoning))
 		die(_("unable to record provenance"));
 	free(author);
 	record_provenance = 1;
@@ -505,8 +507,8 @@ static void update_head(const struct object_id *head,
 	provenance_record_release(&prov_lines);
 	provenance_reasoning_release(&prov_reasoning);
 
-	if (provenance_journal_clear(the_repository))
-		warning_errno(_("unable to clear the provenance journal"));
+	provenance_journal_consume(the_repository, &prov_journal, new_head, 0);
+	provenance_journal_release(&prov_journal);
 }
 
 static void squash_message(struct commit *commit, struct commit_list *remoteheads)

@@ -41,14 +41,27 @@ transferred.  See the "Capture journal" section of
 
 linkgit:git-commit[1] reads the journal to tell which lines of the
 commit were written by which session, records the result as the
-provenance of the commit, and then empties the journal.  A partial
-commit, made with a pathspec, `--only` or `--include`, keeps the
-journal, as its stamps may be needed for the paths left out.  Any other
-commit consumes all stamps, including those for changes that it does
-not include, such as changes left unstaged by `git add -p`; when those
-changes are committed later, their lines are recorded as written by a
-human.  With `provenance.enabled` set to false, `git commit` leaves the
-journal alone.
+provenance of the commit, and then removes the stamps it consumed.
+
+Each stamp records the commit that HEAD pointed at when it was made.
+The stamps taken on the commit that HEAD points at when the commit is
+made tell how the working tree came from it.  A partial commit, made
+with a pathspec, `--only` or `--include`, keeps them, as they may be
+needed for the paths left out.  Any other commit consumes them all,
+including those for changes that it does not include, such as changes
+left unstaged by `git add -p`; when those changes are committed later,
+their lines are recorded as written by a human.
+
+Stamps taken on another commit, before a branch switch for instance,
+only give a session the lines that it added and that the commit adds
+as they are, found by their text, and are consumed once a commit used
+them.  Until then they stay in the journal, so that they apply again
+when HEAD is back on their commit, unless no branch reaches that
+commit any more.  A `begin` and an `end` taken on different commits
+are ignored and dropped.  A linkgit:git-stash[1] that takes all the
+changes of the working tree takes the journal with it, and gives it
+back when it is applied.  With `provenance.enabled` set to false,
+`git commit` leaves the journal alone.
 
 COMMANDS
 --------
@@ -94,8 +107,10 @@ COMMANDS
 
 `list [--session <id>]`::
 	Print the entries of the journal, one per line, in the order in
-	which they were recorded.  With `--session`, print only the
-	entries of that session.
+	which they were recorded, in the format of the journal: each
+	entry shows the commit that HEAD pointed at when it was made as
+	`head=<commit>` after the session id.  With `--session`, print
+	only the entries of that session.
 
 OPTIONS
 -------

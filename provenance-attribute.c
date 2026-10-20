@@ -104,9 +104,13 @@ struct change {
 /* The changes that one "end" or "edit" entry attributes to a session. */
 struct interval {
 	size_t entry;
+	/* the "begin" entry it starts at, or `entry` */
+	size_t begin;
 	int session;
 	/* path -> struct change */
 	struct strmap changes;
+	/* taken on another commit: used by content (see apply_foreign()) */
+	unsigned foreign : 1;
 };
 
 /* A source of a rewrite, or another parent of a merge. */
@@ -161,7 +165,9 @@ struct restored_file {
 
 struct attribution {
 	struct repository *r;
-	const struct provenance_journal *journal;
+	struct provenance_journal *journal;
+	/* the commit HEAD points at, or the null oid */
+	struct object_id head;
 
 	/* the sources, then the other parents of a merge */
 	struct seed *seeds;
@@ -493,6 +499,47 @@ static void claim_patch(struct attribution *a, size_t entry,
 	free(buf);
 }
 
+/*
+ * Mark the entries of the journal taken on another commit than the one
+ * HEAD points at as foreign, and the "begin" and "end" entries of an
+ * interval during which HEAD moved as crossing.  An entry without a
+ * head counts as taken on HEAD; the two entries of an interval of
+ * which only one has a head are classified by that one.
+ */
+static void classify_entries(struct attribution *a)
+{
+	struct provenance_journal *j = a->journal;
+	struct strintmap open;
+
+	strintmap_init(&open, -1);
+	for (size_t i = 0; i < j->nr; i++) {
+		struct provenance_journal_entry *e = &j->entries[i];
+		struct provenance_journal_entry *b;
+		int begin;
+
+		e->foreign = !is_null_oid(&e->head) &&
+			     !oideq(&e->head, &a->head);
+		e->crossing = e->used = 0;
+		if (e->type == PROVENANCE_JOURNAL_BEGIN) {
+			strintmap_set(&open, e->session, (int)i);
+			continue;
+		}
+		if (e->type != PROVENANCE_JOURNAL_END)
+			continue;
+		begin = strintmap_get(&open, e->session);
+		if (begin < 0)
+			continue;
+		strintmap_set(&open, e->session, -1);
+		b = &j->entries[begin];
+		if (!is_null_oid(&b->head) && !is_null_oid(&e->head) &&
+		    !oideq(&b->head, &e->head))
+			b->crossing = e->crossing = 1;
+		else
+			b->foreign = e->foreign = b->foreign || e->foreign;
+	}
+	strintmap_clear(&open);
+}
+
 static void collect_sessions(struct attribution *a, const char *session)
 {
 	const struct provenance_journal *j = a->journal;
@@ -512,6 +559,8 @@ static void collect_sessions(struct attribution *a, const char *session)
 				s->tool = e->tool;
 			break;
 		case PROVENANCE_JOURNAL_END:
+			if (e->crossing)
+				break;
 			s->ended = e->time;
 			s->stamped = 1;
 			break;
@@ -522,7 +571,9 @@ static void collect_sessions(struct attribution *a, const char *session)
 			s->summary = &e->oid;
 			break;
 		case PROVENANCE_JOURNAL_CLAIM_PATH:
-			string_list_append(&s->claims, e->path);
+			/* a path claimed on another commit says nothing */
+			if (!e->foreign)
+				string_list_append(&s->claims, e->path);
 			break;
 		case PROVENANCE_JOURNAL_CLAIM_PATCH:
 			claim_patch(a, i, s);
@@ -595,24 +646,40 @@ static void collect_changes(struct attribution *a,
 	diff_flush(&opt);
 }
 
-static struct interval *add_interval(struct attribution *a, size_t entry,
-				     int session)
+static struct interval *add_interval(struct attribution *a, size_t begin,
+				     size_t entry, int session)
 {
 	struct interval *iv;
 
 	ALLOC_GROW(a->intervals, a->intervals_nr + 1, a->intervals_alloc);
 	iv = &a->intervals[a->intervals_nr++];
 	iv->entry = entry;
+	iv->begin = begin;
 	iv->session = session;
+	iv->foreign = a->journal->entries[entry].foreign;
 	strmap_init(&iv->changes);
 	return iv;
+}
+
+/* The tree of the commit `oid`, or NULL if it cannot be read. */
+static const struct object_id *head_tree(struct attribution *a,
+					 const struct object_id *oid)
+{
+	struct commit *commit = lookup_commit_reference_gently(a->r, oid, 1);
+
+	if (!commit || repo_parse_commit(a->r, commit))
+		return NULL;
+	return get_commit_tree_oid(commit);
 }
 
 /*
  * Turn the "end" and "edit" entries of the journal into intervals.  The
  * changes of an "end" entry are those since the "begin" of its session,
  * or, without one, since the last snapshot of any session, or, without
- * one, since the first parent `base`.
+ * one, since the first parent `base`.  For a foreign "end" without a
+ * "begin", they are those since the commit it was taken on.  The
+ * entries of an interval during which HEAD moved are ignored, and only
+ * the snapshots taken on HEAD are snapshots of any session.
  */
 static void collect_intervals(struct attribution *a,
 			      const struct object_id *base)
@@ -629,34 +696,43 @@ static void collect_intervals(struct attribution *a,
 		const struct provenance_journal_entry *e = &j->entries[i];
 		int s = session_index(a, e->session);
 		const struct object_id *pre;
+		ssize_t begin;
 		struct interval *iv;
 		struct change *c;
 
 		switch (e->type) {
 		case PROVENANCE_JOURNAL_BEGIN:
 			open_begin[s] = i;
-			if (has_type(a, &e->oid, OBJ_TREE))
-				last = &e->oid;
-			else
+			if (e->crossing)
+				break;
+			if (!has_type(a, &e->oid, OBJ_TREE))
 				warn_entry(a, i, &e->oid);
+			else if (!e->foreign)
+				last = &e->oid;
 			break;
 		case PROVENANCE_JOURNAL_END:
-			pre = last;
-			if (open_begin[s] >= 0) {
-				pre = &j->entries[open_begin[s]].oid;
+			begin = open_begin[s];
+			open_begin[s] = -1;
+			if (e->crossing)
+				break;
+			if (begin >= 0)
 				/* a "begin" is warned about iff it is unusable */
-				if (a->warned[open_begin[s]])
-					pre = NULL;
-				open_begin[s] = -1;
-			}
+				pre = a->warned[begin] ? NULL :
+				      &j->entries[begin].oid;
+			else if (e->foreign)
+				pre = head_tree(a, &e->head);
+			else
+				pre = last;
 			if (!has_type(a, &e->oid, OBJ_TREE)) {
 				warn_entry(a, i, &e->oid);
 				break;
 			}
-			last = &e->oid;
+			if (!e->foreign)
+				last = &e->oid;
 			if (!pre)
 				break;
-			iv = add_interval(a, i, s);
+			iv = add_interval(a, begin >= 0 ? (size_t)begin : i,
+					  i, s);
 			collect_changes(a, pre, &e->oid, &iv->changes);
 			break;
 		case PROVENANCE_JOURNAL_EDIT:
@@ -668,7 +744,7 @@ static void collect_intervals(struct attribution *a,
 				warn_entry(a, i, &e->oid2);
 				break;
 			}
-			iv = add_interval(a, i, s);
+			iv = add_interval(a, i, i, s);
 			CALLOC_ARRAY(c, 1);
 			oidcpy(&c->pre, &e->oid);
 			oidcpy(&c->post, &e->oid2);
@@ -1536,6 +1612,146 @@ static int apply_claims(struct attribution *a, const char *path,
 }
 
 /*
+ * Whether the change `c` of the interval `iv` changes its path and its
+ * blobs can be read, with a warning about the entry if they cannot.
+ */
+static int usable_change(struct attribution *a, const struct interval *iv,
+			 const struct change *c)
+{
+	if (!c || oideq(&c->pre, &c->post))
+		return 0;
+	if (!has_type(a, &c->pre, OBJ_BLOB)) {
+		warn_entry(a, iv->entry, &c->pre);
+		return 0;
+	}
+	if (!has_type(a, &c->post, OBJ_BLOB)) {
+		warn_entry(a, iv->entry, &c->post);
+		return 0;
+	}
+	return 1;
+}
+
+/* The runs of lines that a change adds, as they are found. */
+struct added_runs {
+	struct attribution *a;
+	/* the post-image, and the start of its line `line` (1-based) */
+	const mmfile_t *post;
+	const char *pos;
+	unsigned long line;
+	struct provenance_range *ranges;
+	size_t nr, alloc;
+};
+
+/* Advance `ar->pos` to the start of the line `line` of the post-image. */
+static void skip_to_line(struct added_runs *ar, unsigned long line)
+{
+	const char *end = ar->post->ptr + ar->post->size;
+
+	while (ar->line < line && ar->pos < end) {
+		const char *eol = memchr(ar->pos, '\n', end - ar->pos);
+
+		ar->pos = eol ? eol + 1 : end;
+		ar->line++;
+	}
+}
+
+static int add_run(long start_a UNUSED, long count_a UNUSED,
+		   long start_b, long count_b, void *data)
+{
+	struct added_runs *ar = data;
+	struct provenance_range *range;
+	const char *from;
+
+	if (count_b <= 0)
+		return 0;
+	ALLOC_GROW(ar->ranges, ar->nr + 1, ar->alloc);
+	range = &ar->ranges[ar->nr++];
+	memset(range, 0, sizeof(*range));
+	range->side = '+';
+	range->begin = start_b + 1;
+	range->end = start_b + count_b;
+	skip_to_line(ar, range->begin);
+	from = ar->pos;
+	skip_to_line(ar, range->end + 1);
+	hash_object_file(ar->a->r->hash_algo, from, ar->pos - from, OBJ_BLOB,
+			 &range->anchor);
+	return 0;
+}
+
+/*
+ * Give the human lines that the commit adds to the file, at its
+ * version in the commit, and that a foreign interval added, to the
+ * session of the interval: the runs of lines that each change of the
+ * interval to `path` adds are located by their content among the runs
+ * of lines that the commit adds, as the hunks of "claim --patch" are.
+ * `pre` is the version of the file in the first parent.  An interval
+ * that gives a line to its session is marked as used.  Returns 0 on
+ * success, or -1 after reporting an error.
+ */
+static int apply_foreign(struct attribution *a, const char *path,
+			 const struct object_id *pre, struct file_state *fs)
+{
+	int human = singleton(a, a->human);
+	mmfile_t old = { 0 };
+	int ret = 0;
+
+	for (size_t i = 0; !ret && i < a->intervals_nr; i++) {
+		struct interval *iv = &a->intervals[i];
+		const struct change *c = strmap_get(&iv->changes, path);
+		mmfile_t before, after;
+		struct added_runs ar = { .a = a, .line = 1 };
+		char *found = NULL;
+		int set = -1;
+
+		if (!iv->foreign || !usable_change(a, iv, c))
+			continue;
+		if ((!old.ptr && read_blob(a, pre, &old)) ||
+		    read_blob(a, &c->pre, &before)) {
+			ret = -1;
+			break;
+		}
+		if (read_blob(a, &c->post, &after)) {
+			free(before.ptr);
+			ret = -1;
+			break;
+		}
+		ar.post = &after;
+		ar.pos = after.ptr;
+		if (diff_hunks(&before, &after, add_run, &ar))
+			ret = error(_("unable to diff '%s' and '%s'"),
+				    oid_to_hex(&c->pre), oid_to_hex(&c->post));
+		CALLOC_ARRAY(found, ar.nr);
+		if (!ret && ar.nr &&
+		    provenance_patch_locate_ranges(a->r, &old, &fs->content,
+						   ar.ranges, ar.nr, found))
+			ret = error(_("unable to diff '%s'"), path);
+		for (size_t k = 0; !ret && k < ar.nr; k++) {
+			const struct provenance_range *range = &ar.ranges[k];
+
+			if (!found[k])
+				continue;
+			for (unsigned long l = range->begin; l <= range->end; l++) {
+				if (fs->owners[l - 1].set != human)
+					continue;
+				if (set < 0)
+					set = singleton(a, iv->session);
+				fs->owners[l - 1].set = set;
+			}
+		}
+		if (set >= 0) {
+			a->journal->entries[iv->begin].used = 1;
+			a->journal->entries[iv->entry].used = 1;
+		}
+		free(found);
+		free(ar.ranges);
+		free(before.ptr);
+		free(after.ptr);
+	}
+	free(old.ptr);
+	return ret;
+}
+
+/*
  * Fill in the mark and the actors of a range owned by `set`, ranking
  * the actors by first use as they are seen.  A line of unknown origin
  * stays `UNKNOWN` whoever else touched it, as `MIXED` would claim to
@@ -1732,16 +1948,8 @@ static int attribute_file(struct attribution *a, const char *path,
 		struct interval *iv = &a->intervals[i];
 		const struct change *c = strmap_get(&iv->changes, path);
 
-		if (!c || oideq(&c->pre, &c->post))
+		if (iv->foreign || !usable_change(a, iv, c))
 			continue;
-		if (!has_type(a, &c->pre, OBJ_BLOB)) {
-			warn_entry(a, iv->entry, &c->pre);
-			continue;
-		}
-		if (!has_type(a, &c->post, OBJ_BLOB)) {
-			warn_entry(a, iv->entry, &c->post);
-			continue;
-		}
 		ALLOC_GROW(chain, chain_nr + 1, chain_alloc);
 		chain[chain_nr].change = c;
 		chain[chain_nr].session = iv->session;
@@ -1803,6 +2011,9 @@ static int attribute_file(struct attribution *a, const char *path,
 	}
 
 	ret = drop_others(a, path, &fs, &pre);
+	if (ret)
+		goto out;
+	ret = apply_foreign(a, path, &pre, &fs);
 	if (ret)
 		goto out;
 	ret = apply_claims(a, path, &pre, &fs);
@@ -1930,6 +2141,26 @@ static void add_sessions(struct attribution *a, const char *session,
 
 		if (!a->sessions[i].attached)
 			add_session(a, i, reasoning);
+	}
+}
+
+/*
+ * Mark the foreign "reason" and "claim --patch" entries of the
+ * sessions attached to the commit as used, as their summary or their
+ * hunks are.
+ */
+static void mark_used(struct attribution *a)
+{
+	struct provenance_journal *j = a->journal;
+
+	for (size_t i = 0; i < j->nr; i++) {
+		struct provenance_journal_entry *e = &j->entries[i];
+
+		if (e->foreign &&
+		    (e->type == PROVENANCE_JOURNAL_REASON ||
+		     e->type == PROVENANCE_JOURNAL_CLAIM_PATCH) &&
+		    a->sessions[session_index(a, e->session)].attached)
+			e->used = 1;
 	}
 }
 
@@ -2163,7 +2394,7 @@ static int add_seeds(struct attribution *a,
 static int attribution_init(struct attribution *a, struct repository *r,
 			    const struct object_id *base,
 			    const struct commit_list *others,
-			    const struct provenance_journal *journal,
+			    struct provenance_journal *journal,
 			    const char *session,
 			    const struct provenance_source *sources,
 			    size_t nr, unsigned flags)
@@ -2177,6 +2408,8 @@ static int attribution_init(struct attribution *a, struct repository *r,
 	provenance_cache_init(&a->cache, r);
 	oidmap_init(&a->blamed, 0);
 	CALLOC_ARRAY(a->warned, journal->nr);
+	provenance_journal_head(r, &a->head);
+	classify_entries(a);
 	collect_sessions(a, session);
 	ret = add_seeds(a, sources, nr, others, base);
 	/* the blame may declare actors, which come before the human */
@@ -2228,7 +2461,7 @@ static void attribution_release(struct attribution *a)
 struct provenance_attribution *
 provenance_attribution_new(struct repository *r, const struct object_id *base,
 			   const struct commit_list *others,
-			   const struct provenance_journal *journal)
+			   struct provenance_journal *journal)
 {
 	struct provenance_attribution *pa;
 
@@ -2309,7 +2542,7 @@ static void copy_reasoning(const struct provenance_reasoning *from,
 int provenance_attribute(struct repository *r,
 			 const struct commit_list *parents,
 			 const struct object_id *tree,
-			 const struct provenance_journal *journal,
+			 struct provenance_journal *journal,
 			 const char *session,
 			 const char *human,
 			 struct provenance_record *lines,
@@ -2325,7 +2558,7 @@ int provenance_attribute_rewrite(struct repository *r,
 				 const struct object_id *tree,
 				 const struct provenance_source *sources,
 				 size_t nr, unsigned flags,
-				 const struct provenance_journal *journal,
+				 struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,
 				 struct provenance_record *lines,
@@ -2382,6 +2615,7 @@ int provenance_attribute_rewrite(struct repository *r,
 			    (!sources[i].tentative || a.seeds[i].contributed))
 				copy_reasoning(sources[i].reasoning, reasoning);
 		add_sessions(&a, session, reasoning);
+		mark_used(&a);
 	}
 	attribution_release(&a);
 	return ret;

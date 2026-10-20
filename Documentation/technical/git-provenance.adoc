@@ -308,6 +308,24 @@ unless a human edited the same file in between; harnesses that only
 offer an after-edit hook should prefer `stamp edit` when their payload
 carries the edit.
 
+Each stamp records the commit that `HEAD` pointed at when it was made.
+The snapshots of a session describe how the working tree came from
+that commit, and from no other: once a branch switch or a reset moves
+`HEAD` under pending stamps, they no longer lead from `HEAD` to the
+staged content, and the attribution uses them by content only (see
+"Attribution"). A `git stash push` that removes all the changes from
+the working tree takes the journal with it, and the stamps come back
+with the changes when the stash is applied: on the commit they were
+taken on, they are used as if nothing had happened, and on another
+one, by content. A partial stash (a pathspec, `--patch`,
+`--keep-index` or `--staged`) leaves the journal alone.
+
+Discarding the changes to a file without moving `HEAD`, with `git
+restore` or `git checkout -- <path>`, is not such a move and changes
+nothing: a line that an agent wrote, which was discarded and then
+replaced by one a human wrote, is by content a human replacing an AI
+line, and is `MIXED` by the rule of "Attribution".
+
 The protocol is deliberately agent-agnostic: the extension knows
 nothing about any particular agent or editor, and this repository
 contains no adapters. For an agent with tool-use hooks, an adapter is
@@ -341,9 +359,10 @@ Stamp at edit time, assemble at commit time, repair after commit.
 Attribution
 ~~~~~~~~~~~
 For each staged file, git takes the version chain from the `HEAD`
-blob through the journal's snapshots to the staged blob, each step
-labelled with the actor of its interval, and runs an incremental blame
-over that chain using `xdiff` and the core of `blame.c`:
+blob through the journal's snapshots taken on `HEAD` to the staged
+blob, each step labelled with the actor of its interval, and runs an
+incremental blame over that chain using `xdiff` and the core of
+`blame.c`:
 
 1. Every line of the staged blob is traced to the step that last
    introduced it. That step's actor sets the base mark.
@@ -364,6 +383,25 @@ over that chain using `xdiff` and the core of `blame.c`:
    being made with provenance enabled, so the absence of a stamp is
    the evidence.
 
+The stamps taken on `HEAD` are those whose recorded commit is the one
+`HEAD` points at while the commit is made (for `--amend`, the commit
+being amended), and those of journals written before stamps recorded
+it. An interval whose `begin` and `end` were taken on different
+commits is ignored: the tree moved under the agent's hands, and
+nothing about the interval can be trusted. The intervals and edits
+taken on another commit are never steps of the chain. Each run of
+lines that one of them added to a path is looked for by its text among
+the lines that the commit adds to the path, the closest to where the
+interval put it, as the hunks of `git stamp claim --patch` are; the
+lines of the run that a human would own become the session's, and a
+run that is not found gives the session nothing. So a change that an
+agent made on one branch and the human carried, uncommitted, to
+another keeps its `AI` lines there, while the lines the human wrote on
+the other branch are `HUMAN`, not `MIXED`. The lines such an interval
+removed are not looked for. A path claim made on another commit says
+nothing about this one and is not used; a patch claim is used wherever
+it was made, as it is located by content already.
+
 The reasoning record collects every session whose stamps contributed
 at least one surviving line. Sessions whose work was entirely
 discarded are not attached (configurable).
@@ -378,8 +416,14 @@ ref transaction as the branch, so either all refs move or none do.
 The notes commits that carry the records are authored and committed
 by the committer ident of the commit, not by the environment's
 author, which a rebase may leave unset or unparsable.
-The journal is then emptied, except after a partial commit.
-`provenance.enabled` (on by default) turns all of this off.
+The commit then consumes the journal: the stamps taken on `HEAD`,
+unless it is a partial commit, which keeps them as taken on the new
+commit, and the stamps taken on other commits that it used. The
+stamps taken on another commit that it did not use stay, so that they
+are taken on `HEAD` again once a branch switch brings `HEAD` back to
+that commit; they are dropped when no branch reaches that commit any
+more. The stamps of an interval during which `HEAD` moved are
+dropped. `provenance.enabled` (on by default) turns all of this off.
 
 `--session <id>` is how an agent that commits identifies itself. Git
 attaches that session's reasoning; if the journal has stamps for the
@@ -418,7 +462,7 @@ does the same with the parents of the commit being amended.
 `git merge` computes the records of the merge commits it makes in the
 same way, with the merge's author as the human and no session, before
 the commit object is written, and writes them in the ref transaction
-that moves `HEAD`; the journal is then emptied, as by `git commit`.
+that moves `HEAD`; the journal is then consumed, as by `git commit`.
 `git merge` neither takes `--session` nor gives the advice: the merges
 it makes on its own resolve no conflict. A fast-forward makes no
 commit and records nothing, and a merge that stops, with conflicts or
@@ -548,7 +592,7 @@ parent to the new blob directly.
   The other actors of such a line are not listed, and a session does
   not get attached to the commit through it.
 
-- The journal is used and emptied as by `git commit`, so stamps made
+- The journal is used and consumed as by `git commit`, so stamps made
   while resolving conflicts count.
 
 - AI actors of the source records keep their ids and metadata; the
@@ -633,11 +677,12 @@ source, so one commit may carry picks and reverts together; a revert
 source restores the lines that a blame of its parent finds, as above.
 `REVERT_HEAD` is a source only if the file names no revert, as after a
 `git revert` that stopped on a conflict, so that no reverted commit is
-a source twice. Every commit that empties the journal removes the
-file with it. As the user may have discarded a pick or a revert before
-committing, such a source is tentative: the reasoning of a pick is
-attached only if a line of the commit takes its owners from it, as for
-`adopt`, and a discarded revert restores no line of the commit. `git
+a source twice. Every commit that consumes the journal, unless it is
+partial, removes the file with it. As the user may have discarded a
+pick or a revert before committing, such a source is tentative: the
+reasoning of a pick is attached only if a line of the commit takes its
+owners from it, as for `adopt`, and a discarded revert restores no
+line of the commit. `git
 merge --squash`, which makes no commit either, appends the commits it
 squashes to the same file, oldest first, so that the commit that
 concludes it carries their records as after a `cherry-pick
@@ -666,7 +711,7 @@ changes `UNKNOWN`, as a pick of a commit without a record does. The
 follows the rules of rewrites, and no reasoning record comes with the
 mail. `am` keeps the record in `rebase-apply/provenance` until the
 commit is made, so that `am --continue` has it, writes the records
-in the ref transaction that moves `HEAD`, and empties the journal; as
+in the ref transaction that moves `HEAD`, and consumes the journal; as
 for picks, `provenance.require` does not refuse the commit and no
 advice is given. `am --rebasing`, for `rebase --apply`, keeps taking
 the records of `rebase-apply/original-commit`.

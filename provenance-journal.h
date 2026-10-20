@@ -30,6 +30,12 @@ struct provenance_journal_entry {
 	timestamp_t time;
 	char *session;
 	/*
+	 * The commit HEAD pointed at when the stamp was made, or the null
+	 * oid if HEAD was unborn or the entry does not say (it was written
+	 * by an earlier version).
+	 */
+	struct object_id head;
+	/*
 	 * BEGIN, END: the snapshot tree.
 	 * EDIT: the pre-image blob.
 	 * REASON: the summary blob.
@@ -46,11 +52,28 @@ struct provenance_journal_entry {
 	char *tool;
 	/* EDIT, CLAIM_PATH */
 	char *path;
+
+	/*
+	 * Set by the attribution of a commit (see the "Attribution"
+	 * section of Documentation/technical/git-provenance.adoc) for
+	 * provenance_journal_consume():
+	 *
+	 * foreign: the stamp was taken on another commit than the one
+	 * HEAD points at;
+	 * crossing: the entry is the "begin" or the "end" of an interval
+	 * during which HEAD moved, which is ignored;
+	 * used: the entry is foreign and the commit used it.
+	 */
+	unsigned foreign : 1;
+	unsigned crossing : 1;
+	unsigned used : 1;
 };
 
 struct provenance_journal {
 	struct provenance_journal_entry *entries;
 	size_t nr, alloc;
+	/* the number of lines read, malformed ones included */
+	size_t lines;
 };
 
 #define PROVENANCE_JOURNAL_INIT { 0 }
@@ -60,6 +83,12 @@ struct provenance_journal {
  * the characters [A-Za-z0-9._:-].
  */
 int provenance_session_is_valid(const char *session);
+
+/*
+ * Store in `head` the commit that HEAD of the current worktree of `r`
+ * points at, or the null oid if HEAD is unborn.
+ */
+void provenance_journal_head(struct repository *r, struct object_id *head);
 
 /*
  * Append the serialized form of `e`, without the trailing LF, to
@@ -78,12 +107,53 @@ int provenance_journal_append(struct repository *r,
 			      const struct provenance_journal_entry *e);
 
 /*
- * Remove the journal of the current worktree of `r`, and its picks
- * (see provenance_picks_append()), holding the journal's lock while
- * doing so.  A missing journal or picks file is not an error.  Returns
- * 0 on success, or -1 with errno set, without reporting the error.
+ * Remove from the journal of the current worktree of `r` the entries
+ * of `j` that the commit `commit` consumed, holding the journal's lock
+ * while doing so.  `j` is the journal as it was read for the
+ * attribution of the commit, which marked its entries; entries
+ * appended to the journal since it was read are kept.
+ *
+ * The commit consumes the entries taken on the commit HEAD pointed at
+ * while it was made, and those without a head, unless it is
+ * `partial`: a partial commit keeps them, as taken on `commit`.
+ * Every commit drops the entries of intervals during which HEAD
+ * moved, and the foreign entries taken on a commit that no branch
+ * reaches; a commit that is not `partial` also consumes the foreign
+ * entries it used, and removes the picks (see
+ * provenance_picks_append()).  The journal is removed if no entry is
+ * left.  Returns 0 on success, or -1 after reporting an error.
  */
-int provenance_journal_clear(struct repository *r);
+int provenance_journal_consume(struct repository *r,
+			       const struct provenance_journal *j,
+			       const struct object_id *commit, int partial);
+
+/*
+ * The journal of a stash entry.  A "git stash push" that removes all
+ * the changes from the working tree takes the journal with it: the
+ * journal is moved to "provenance/stash/<stash>" in the common git
+ * directory, as the stash is shared by all worktrees, where <stash> is
+ * the full object id of the stash commit, and its entries come back
+ * when the stash is applied.
+ *
+ * provenance_journal_stash() moves the journal of the current worktree
+ * of `r` to the stash commit `stash`, holding the journal's lock while
+ * doing so.  A missing journal is not an error.
+ *
+ * provenance_journal_unstash() appends the entries moved to `stash` to
+ * the journal of the current worktree of `r`, holding the journal's
+ * lock while doing so, and leaves them with `stash` too.
+ *
+ * provenance_journal_stash_prune() removes the entries moved to the
+ * commits that the reflog of "refs/stash" does not name any more, as
+ * after "git stash pop", "drop" or "clear".
+ *
+ * All return 0 on success, or -1 after reporting an error.
+ */
+int provenance_journal_stash(struct repository *r,
+			     const struct object_id *stash);
+int provenance_journal_unstash(struct repository *r,
+			       const struct object_id *stash);
+int provenance_journal_stash_prune(struct repository *r);
 
 /*
  * The picks of a worktree are the commits that "cherry-pick
