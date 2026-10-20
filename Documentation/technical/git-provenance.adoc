@@ -313,12 +313,18 @@ The snapshots of a session describe how the working tree came from
 that commit, and from no other: once a branch switch or a reset moves
 `HEAD` under pending stamps, they no longer lead from `HEAD` to the
 staged content, and the attribution uses them by content only (see
-"Attribution"). Discarding the changes to a file without moving
-`HEAD`, with `git restore` or `git checkout -- <path>`, is not such a
-move and changes nothing: a line that an agent wrote, which was
-discarded and then replaced by one a human wrote, is by content a
-human replacing an AI line, and is `MIXED` by the rule of
-"Attribution".
+"Attribution"). A `git stash push` that removes all the changes from
+the working tree takes the journal with it, and the stamps come back
+with the changes when the stash is applied: on the commit they were
+taken on, they are used as if nothing had happened, and on another
+one, by content. A partial stash (a pathspec, `--patch`,
+`--keep-index` or `--staged`) leaves the journal alone.
+
+Discarding the changes to a file without moving `HEAD`, with `git
+restore` or `git checkout -- <path>`, is not such a move and changes
+nothing: a line that an agent wrote, which was discarded and then
+replaced by one a human wrote, is by content a human replacing an AI
+line, and is `MIXED` by the rule of "Attribution".
 
 The protocol is deliberately agent-agnostic: the extension knows
 nothing about any particular agent or editor, and this repository

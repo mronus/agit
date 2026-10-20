@@ -345,6 +345,117 @@ out:
 	return ret;
 }
 
+static char *stash_path(struct repository *r, const struct object_id *stash)
+{
+	return repo_common_path(r, "provenance/stash/%s", oid_to_hex(stash));
+}
+
+int provenance_journal_stash(struct repository *r,
+			     const struct object_id *stash)
+{
+	struct lock_file lk = LOCK_INIT;
+	char *path = repo_git_path(r, "provenance/journal");
+	char *dest = stash_path(r, stash);
+	int ret = 0;
+
+	if (!file_exists(path))
+		goto out;
+	if (lock_journal(r, &lk, path)) {
+		ret = -1;
+		goto out;
+	}
+	if (safe_create_leading_directories(r, dest))
+		ret = error_errno(_("unable to create directory for '%s'"),
+				  dest);
+	else if (rename(path, dest) && errno != ENOENT)
+		ret = error_errno(_("unable to move '%s' to '%s'"), path, dest);
+	rollback_lock_file(&lk);
+
+out:
+	free(path);
+	free(dest);
+	return ret;
+}
+
+int provenance_journal_unstash(struct repository *r,
+			       const struct object_id *stash)
+{
+	struct lock_file lk = LOCK_INIT;
+	struct strbuf entries = STRBUF_INIT;
+	char *path = repo_git_path(r, "provenance/journal");
+	char *from = stash_path(r, stash);
+	int ret = 0;
+
+	if (strbuf_read_file(&entries, from, 0) < 0) {
+		if (errno != ENOENT)
+			ret = error_errno(_("unable to read '%s'"), from);
+		goto out;
+	}
+	strbuf_strip_suffix(&entries, "\n");
+	if (!entries.len)
+		goto out;
+	if (lock_journal(r, &lk, path))
+		ret = -1;
+	else
+		ret = append_line(&lk, path, &entries);
+	rollback_lock_file(&lk);
+
+out:
+	strbuf_release(&entries);
+	free(path);
+	free(from);
+	return ret;
+}
+
+static int add_stash(const char *refname UNUSED,
+		     struct object_id *old_oid UNUSED,
+		     struct object_id *new_oid,
+		     const char *committer UNUSED,
+		     timestamp_t timestamp UNUSED,
+		     int tz UNUSED, const char *msg UNUSED,
+		     void *data)
+{
+	oidset_insert(data, new_oid);
+	return 0;
+}
+
+int provenance_journal_stash_prune(struct repository *r)
+{
+	struct oidset stashes = OIDSET_INIT;
+	char *dir = repo_common_path(r, "provenance/stash");
+	DIR *d = opendir(dir);
+	struct dirent *de;
+	int ret = 0;
+
+	if (!d) {
+		if (errno != ENOENT)
+			ret = error_errno(_("unable to open '%s'"), dir);
+		goto out;
+	}
+	refs_for_each_reflog_ent(get_main_ref_store(r), "refs/stash",
+				 add_stash, &stashes);
+	while ((de = readdir_skip_dot_and_dotdot(d))) {
+		struct object_id oid;
+		const char *end;
+		char *path;
+
+		if (!parse_oid_hex_algop(de->d_name, &oid, &end, r->hash_algo) &&
+		    !*end && oidset_contains(&stashes, &oid))
+			continue;
+		path = xstrfmt("%s/%s", dir, de->d_name);
+		if (unlink(path) && errno != ENOENT)
+			ret = error_errno(_("unable to remove '%s'"), path);
+		free(path);
+	}
+	closedir(d);
+	rmdir(dir);
+
+out:
+	oidset_clear(&stashes);
+	free(dir);
+	return ret;
+}
+
 int provenance_picks_read(struct repository *r,
 			  struct provenance_picks *picks)
 {

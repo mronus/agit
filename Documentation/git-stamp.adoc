@@ -58,7 +58,9 @@ as they are, found by their text, and are consumed once a commit used
 them.  Until then they stay in the journal, so that they apply again
 when HEAD is back on their commit, unless no branch reaches that
 commit any more.  A `begin` and an `end` taken on different commits
-are ignored and dropped.  With `provenance.enabled` set to false,
+are ignored and dropped.  A linkgit:git-stash[1] that takes all the
+changes of the working tree takes the journal with it, and gives it
+back when it is applied.  With `provenance.enabled` set to false,
 `git commit` leaves the journal alone.
 
 COMMANDS

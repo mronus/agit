@@ -470,6 +470,21 @@ left.  Entries appended while the commit was made are kept.
 
 The commit skips entries whose objects are missing with a warning.
 
+A `git stash push` that removes all the changes from the working
+tree, one without a pathspec, `--patch`, `--keep-index` or
+`--staged`, takes the journal with it, as its stamps describe changes
+that are no longer there.  It moves the journal, entries unchanged, to
+`provenance/stash/<stash>` in the common git directory, where
+`<stash>` is the full object id of the stash commit: like `refs/stash`,
+these files are shared by all worktrees.  `git stash apply`, `pop` and
+`branch`, once the stash applied without conflicts, append the
+entries of its file to the journal of the current worktree, where they
+are foreign if HEAD is on another commit than the one they were taken
+on.  A file whose stash commit the reflog of `refs/stash` does not
+name, as after `git stash pop`, `drop` or `clear`, is removed by the
+next `git stash push`, `pop`, `drop` or `clear`.  Other stashes leave
+the journal alone.
+
 Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
 that `git cherry-pick --no-commit` applied and `git revert
 --no-commit` reverted since the last commit, and those that `git merge

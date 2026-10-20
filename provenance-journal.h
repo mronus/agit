@@ -128,6 +128,34 @@ int provenance_journal_consume(struct repository *r,
 			       const struct object_id *commit, int partial);
 
 /*
+ * The journal of a stash entry.  A "git stash push" that removes all
+ * the changes from the working tree takes the journal with it: the
+ * journal is moved to "provenance/stash/<stash>" in the common git
+ * directory, as the stash is shared by all worktrees, where <stash> is
+ * the full object id of the stash commit, and its entries come back
+ * when the stash is applied.
+ *
+ * provenance_journal_stash() moves the journal of the current worktree
+ * of `r` to the stash commit `stash`, holding the journal's lock while
+ * doing so.  A missing journal is not an error.
+ *
+ * provenance_journal_unstash() appends the entries moved to `stash` to
+ * the journal of the current worktree of `r`, holding the journal's
+ * lock while doing so, and leaves them with `stash` too.
+ *
+ * provenance_journal_stash_prune() removes the entries moved to the
+ * commits that the reflog of "refs/stash" does not name any more, as
+ * after "git stash pop", "drop" or "clear".
+ *
+ * All return 0 on success, or -1 after reporting an error.
+ */
+int provenance_journal_stash(struct repository *r,
+			     const struct object_id *stash);
+int provenance_journal_unstash(struct repository *r,
+			       const struct object_id *stash);
+int provenance_journal_stash_prune(struct repository *r);
+
+/*
  * The picks of a worktree are the commits that "cherry-pick
  * --no-commit" applied to it, or that "revert --no-commit" undid,
  * since the last commit, whose records the next commit carries over.
