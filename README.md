@@ -4,87 +4,119 @@
 AGit - agentic, fast, scalable, distributed revision control system
 ===================================================================
 
-This repository is agit, a distribution of Git with the *provenance*
-extension. Provenance records, for each commit, the AI reasoning behind
-it and, for each changed line, whether an AI agent, a human, or both
-wrote it. The records are stored outside the commit objects, as
-notes-style refs under `refs/provenance/`, so a repository remains a
-plain Git repository that works with any Git client or hosting service.
-The design is described in [Documentation/technical/git-provenance.adoc][]
-and the record formats in
-[Documentation/technical/git-provenance-format.adoc][].
+AGit is Git with the *provenance* extension. For every commit it
+records why the change was made and, for every changed line, who wrote
+it: an AI agent, a human, or both. The records live in notes-style refs
+under `refs/provenance/`, outside the commit objects, so an AGit
+repository stays a plain Git repository that any Git client and any
+hosting service can work with. The executable is `git`, and everything
+Git does works as before.
 
-The executable is `git`; agit is the name of the release. Releases are
-cut on an upstream Git release tag and marked with an annotated tag
-`v<upstream version>.agit.<n>`, the convention Git for Windows uses
-with `.windows.<n>`, so that `git version` reports, for example,
-`git version 2.56.0.agit.1`, and a development build reports
-`git version 2.56.0.agit.1.<count>.g<hash>`. `<n>` starts at 1 for each
-upstream release and increases for agit-only releases on the same base;
-pre-releases use the `-rc<n>` suffix as upstream does. The first line of
-`git version` output keeps the standard `git version <version>` form,
-because IDEs and other tools identify a Git executable by it.
-Development happens on `master`, which merges upstream's `master`.
+Install
+-------
 
-Please read the file [INSTALL][] for installation instructions.
+    curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh
 
-Many Git online resources are accessible from <https://git-scm.com/>
-including full documentation and Git related tools.
+The installer downloads a prebuilt release for macOS (12 or later,
+arm64 or x86_64) or Linux (glibc 2.31 or later, x86_64 or aarch64),
+checks it against the release's checksums, installs it under
+`~/.agit`, and puts it first on your `PATH`, so that it becomes your
+`git` without touching the Git that came with your system or Homebrew.
+It needs no root and builds nothing. At the end it offers to connect
+your coding agents. To remove everything it added:
 
-See [Documentation/gittutorial.adoc][] to get started, then see
-[Documentation/giteveryday.adoc][] for a useful minimum set of commands, and
-`Documentation/git-<commandname>.adoc` for documentation of each command.
-If git has been correctly installed, then the tutorial can also be
-read with `man gittutorial` or `git help tutorial`, and the
-documentation of each command with `man git-<commandname>` or `git help
-<commandname>`.
+    curl -fsSL https://raw.githubusercontent.com/mronus/agit-setup/main/install.sh | sh -s -- --uninstall
 
-CVS users may also want to read [Documentation/gitcvs-migration.adoc][]
-(`man gitcvs-migration` or `git help cvs-migration` if git is
-installed).
+Run it with `--help` for its options. To build from source instead,
+see [INSTALL][].
 
-The user discussion and development of Git take place on the Git
-mailing list -- everyone is welcome to post bug reports, feature
-requests, comments and patches to git@vger.kernel.org (read
-[Documentation/SubmittingPatches][] for instructions on patch submission
-and [Documentation/CodingGuidelines][]).
+Connecting coding agents
+------------------------
 
-Those wishing to help with error message, usage and informational message
-string translations (localization l10) should see [po/README.md][]
-(a `po` file is a Portable Object file that holds the translations).
+AGit knows which lines an agent wrote because the agent's harness tells
+it, through `git stamp`, while the agent edits files (see
+[git-stamp(1)][]). `agit-setup`, installed with AGit, connects the
+agents found on your machine through their hooks; run it again at any
+time to change the choice. The hooks and the list of supported agents
+are maintained in [mronus/agit-setup][]; this repository stays agent
+agnostic. Nothing has to change in how you or the agent use Git: the
+next `git commit` picks the stamps up.
 
-To subscribe to the list, send an email to <git+subscribe@vger.kernel.org>
-(see https://subspace.kernel.org/subscribing.html for details). The mailing
-list archives are available at <https://lore.kernel.org/git/>,
-<https://marc.info/?l=git> and other archival sites.
+What you get
+------------
 
-Issues which are security relevant should be disclosed privately to
-the Git Security mailing list <git-security@googlegroups.com>.
+Each line a commit changes is marked `A` (AI), `M` (mixed: touched by
+both), `H` (human) or `?` (unknown: made without provenance, such as
+history from before AGit or commits made by other Git versions).
 
-The maintainer frequently sends the "What's cooking" reports that
-list the current status of various development topics to the mailing
-list.  The discussion following them give a good reference for
-project status, development direction and remaining tasks.
+    git show --provenance <commit>         # the diff, with a mark per line
+    git blame --provenance <file>          # who wrote each line of a file
+    git log --format='%h %(provenance:share) %s'
+                                           # the AI share of each commit
+    git provenance show [--reasoning] <commit>
+                                           # the line record, or the reasoning
+    git provenance stat <range>            # totals by mark over a range
 
-The name "git" was given by Linus Torvalds when he wrote the very
-first version. He described the tool as "the stupid content tracker"
-and the name as (depending on your mood):
+Rebases, cherry-picks, reverts, merges, amends, `git am` and
+`format-patch` carry the records along with the commits. `git
+provenance adopt` gives records to commits made without them, and
+[git-provenance(1)][] covers the rest: verifying, remapping after a
+`fast-import`, purging reasoning, pruning and statistics.
 
- - random three-letter combination that is pronounceable, and not
-   actually used by any common UNIX command.  The fact that it is a
-   mispronunciation of "get" may or may not be relevant.
- - stupid. contemptible and despicable. simple. Take your pick from the
-   dictionary of slang.
- - "global information tracker": you're in a good mood, and it actually
-   works for you. Angels sing, and a light suddenly fills the room.
- - "goddamn idiotic truckload of sh*t": when it breaks
+Remotes
+-------
+
+`git fetch`, `git pull`, `git push` and `git clone` carry the records
+with the branches: when a branch is pushed, its records go along to the
+same remote. Hosting services store the refs but do not show them. With
+a Git without the extension, fetch them explicitly:
+
+    git fetch origin 'refs/provenance/*:refs/provenance/*'
+
+Commits created by a hosting service, such as the merge commit of a
+pull request, have no record of their own; the commits they merge keep
+theirs.
+
+Versions
+--------
+
+Releases are tagged `v<Git version>.agit.<n>` on top of a Git release,
+as Git for Windows does with `.windows.<n>`, and `git version` reports,
+for example, `git version 2.56.0.agit.2`. Prebuilt releases are on the
+[releases page][].
+
+Documentation
+-------------
+
+- [Documentation/technical/git-provenance.adoc][]: the design.
+- [Documentation/technical/git-provenance-format.adoc][]: the record
+  and journal formats.
+- [git-stamp(1)][] and [git-provenance(1)][]: the commands; with AGit
+  installed, also `git help stamp` and `git help provenance`.
+
+Everything else is Git: see Git's own [README][git-readme] and
+<https://git-scm.com/> for its documentation, community and support.
+
+Contributing and issues
+-----------------------
+
+Report problems with the provenance extension, the releases or the
+installer in this repository's [issues][]. Problems with Git itself
+belong upstream, as Git's [README][git-readme] describes.
+
+License
+-------
+
+AGit, like Git, is covered by the GNU General Public License version 2;
+see [COPYING][].
 
 [INSTALL]: INSTALL
-[Documentation/gittutorial.adoc]: Documentation/gittutorial.adoc
-[Documentation/giteveryday.adoc]: Documentation/giteveryday.adoc
-[Documentation/gitcvs-migration.adoc]: Documentation/gitcvs-migration.adoc
-[Documentation/SubmittingPatches]: Documentation/SubmittingPatches
-[Documentation/CodingGuidelines]: Documentation/CodingGuidelines
-[po/README.md]: po/README.md
+[COPYING]: COPYING
+[git-stamp(1)]: Documentation/git-stamp.adoc
+[git-provenance(1)]: Documentation/git-provenance.adoc
 [Documentation/technical/git-provenance.adoc]: Documentation/technical/git-provenance.adoc
 [Documentation/technical/git-provenance-format.adoc]: Documentation/technical/git-provenance-format.adoc
+[mronus/agit-setup]: https://github.com/mronus/agit-setup
+[releases page]: https://github.com/mronus/agit/releases
+[issues]: https://github.com/mronus/agit/issues
+[git-readme]: https://github.com/git/git/blob/master/README.md
