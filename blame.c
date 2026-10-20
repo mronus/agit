@@ -2773,6 +2773,11 @@ void setup_scoreboard(struct blame_scoreboard *sb,
 	struct commit *final_commit = NULL;
 	enum object_type type;
 
+	/*
+	 * A process may set up several scoreboards; free the slab of
+	 * the previous one before starting afresh.
+	 */
+	clear_blame_suspects(&blame_suspects);
 	init_blame_suspects(&blame_suspects);
 
 	if (sb->reverse && sb->contents_from)

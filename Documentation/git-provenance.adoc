@@ -128,16 +128,15 @@ to the new ones is found by joining the marks files that the export
 and the import write, which give each commit of the stream the same
 mark.  Here a stream is edited and imported into a new repository,
 which receives the records keyed by the old ids, and the records are
-then carried over (`<(...)` is the process substitution of shells
-such as bash):
+then carried over:
 +
 ------------
 $ git fast-export --all --export-marks=../old.marks >../stream
 $ <edit or filter ../stream>
 $ git init ../new && cd ../new
 $ git fast-import --export-marks=../new.marks <../stream
-$ join <(sort ../old.marks) <(sort ../new.marks) | cut -d' ' -f2,3 |
-  git provenance remap
+$ awk 'NR == FNR { old[$1] = $2; next } $1 in old { print old[$1], $2 }' \
+  ../old.marks ../new.marks | git provenance remap
 ------------
 +
 The pairs of the blobs of the stream, and of the commits whose ids
