@@ -1,0 +1,27 @@
+agit v2.56.0.agit.2 Release Notes
+=================================
+
+This is a maintenance release of agit v2.56.0.agit.1, on the same
+base, Git v2.56.0 and the development of Git that followed it up to
+"The 6th batch" (c51408889c, 2026-10-16).
+
+
+Distribution
+------------
+
+ * Releases now come with prebuilt binaries for macOS (arm64, x86_64;
+   macOS 12 or later) and Linux (x86_64, aarch64; glibc 2.31 or later
+   with libcurl and zlib), as relocatable tarballs that run from any
+   directory, with man pages, a source tarball and a SHA256SUMS file.
+
+
+Fixes since v2.56.0.agit.1
+--------------------------
+
+ * A commit that carries several "git revert --no-commit" leaked the
+   memory of all but the last blame that the attribution runs to find
+   the owners of the restored lines.
+
+ * The example in the "git provenance remap" documentation builds the
+   map of old to new commit ids with awk, instead of "join" and the
+   process substitution of bash, so that it works in any POSIX shell.
