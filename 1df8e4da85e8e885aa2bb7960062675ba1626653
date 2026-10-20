@@ -1,0 +1,5 @@
+version 1
+commit 1df8e4da85e8e885aa2bb7960062675ba1626653
+session 683d44a8-1e69-4001-a42d-411f2e7d0951 model=claude-opus-5-5 tool=claude-code started=1792470402 ended=1792470428
+
+Pointed the README badges at this repository: the CI workflow on master and the release workflow for tag pushes, instead of upstream Git's GitHub and GitLab pipelines.
