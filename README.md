@@ -1,20 +1,8 @@
-[![GitHub build status](https://github.com/git/git/workflows/CI/badge.svg)](https://github.com/git/git/actions?query=branch%3Amaster+event%3Apush)
-[![GitLab build status](https://gitlab.com/git-scm/git/badges/master/pipeline.svg)](https://gitlab.com/git-scm/git/-/pipelines?ref=master)
+[![CI](https://github.com/mronus/agit/actions/workflows/main.yml/badge.svg?branch=master&event=push)](https://github.com/mronus/agit/actions/workflows/main.yml?query=branch%3Amaster+event%3Apush)
+[![Release](https://github.com/mronus/agit/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/mronus/agit/actions/workflows/release.yml?query=event%3Apush)
 
-Git - fast, scalable, distributed revision control system
-=========================================================
-
-Git is a fast, scalable, distributed revision control system with an
-unusually rich command set that provides both high-level operations
-and full access to internals.
-
-Git is an Open Source project covered by the GNU General Public
-License version 2 (some parts of it are under different licenses,
-compatible with the GPLv2). It was originally written by Linus
-Torvalds with help of a group of hackers around the net.
-
-agit
-----
+AGit - agentic, fast, scalable, distributed revision control system
+===================================================================
 
 This repository is agit, a distribution of Git with the *provenance*
 extension. Provenance records, for each commit, the AI reasoning behind
