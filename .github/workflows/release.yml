@@ -1,0 +1,163 @@
+name: Release
+
+# Build relocatable binary tarballs for a release tag and attach them,
+# with the manual pages and the source tarball, to its GitHub release.
+# Pull requests that change the release build run everything except
+# the upload.  To build an existing tag again, run the workflow by hand
+# with that tag.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build'
+        required: true
+  pull_request:
+    paths: ['.github/workflows/release.yml', 'ci/release-tarball.sh']
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+    - name: install dependencies
+      run: |
+        sudo apt-get -q update &&
+        sudo apt-get -q -y install asciidoctor xmlto docbook-xsl-ns autoconf \
+          libcurl4-openssl-dev zlib1g-dev &&
+        sudo gem install concurrent-ruby
+    - name: build the manual pages and the source tarball
+      run: |
+        make GIT-VERSION-FILE &&
+        version=$(sed -n 's/^GIT_VERSION *= *//p' GIT-VERSION-FILE) &&
+        mkdir dist &&
+        make -C Documentation install-man USE_ASCIIDOCTOR=YesPlease DESTDIR="$PWD/stage" prefix=/ &&
+        tar -czf "dist/agit-$version-manpages.tar.gz" -C stage share/man &&
+        make dist &&
+        mv "git-$version.tar.gz" "dist/agit-$version-src.tar.gz"
+    - uses: actions/upload-artifact@v7
+      with:
+        name: docs
+        path: dist
+
+  build-darwin:
+    needs: docs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: darwin-arm64
+          runner: macos-15
+        - platform: darwin-x86_64
+          runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+    - uses: actions/download-artifact@v8
+      with:
+        name: docs
+        path: docs
+    - run: ci/release-tarball.sh ${{ matrix.platform }} dist docs/agit-*-manpages.tar.gz
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.platform }}
+        path: dist
+
+  # Built on Ubuntu 20.04 (glibc 2.31), so the binaries run on any
+  # distribution with glibc 2.31 or newer.
+  build-linux:
+    needs: docs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: linux-x86_64
+          runner: ubuntu-latest
+        - platform: linux-aarch64
+          runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:20.04
+    steps:
+    - name: install dependencies
+      run: |
+        apt-get -q update &&
+        DEBIAN_FRONTEND=noninteractive apt-get -q -y install \
+          git build-essential libcurl4-openssl-dev zlib1g-dev \
+          perl python3 tar gzip ca-certificates curl cargo
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+    - uses: actions/download-artifact@v8
+      with:
+        name: docs
+        path: docs
+    - run: |
+        git config --global --add safe.directory "$PWD" &&
+        ci/release-tarball.sh ${{ matrix.platform }} dist docs/agit-*-manpages.tar.gz
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.platform }}
+        path: dist
+
+  # Beyond glibc and zlib, libcurl (with the CA certificates) is the
+  # one library the Linux tarballs need at runtime.
+  test-linux:
+    needs: build-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'ubuntu:22.04', 'fedora:latest']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+    - name: install libcurl
+      run: |
+        if command -v apt-get
+        then
+          apt-get -q update &&
+          apt-get -q -y install libcurl4 ca-certificates
+        else
+          dnf -yq install --allowerasing libcurl ca-certificates tar gzip
+        fi
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+    - uses: actions/download-artifact@v8
+      with:
+        name: linux-x86_64
+        path: dist
+    - run: ci/release-tarball.sh --smoke-test dist/agit-*-linux-x86_64.tar.gz
+
+  publish:
+    needs: [build-darwin, test-linux]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag || github.ref }}
+    - uses: actions/download-artifact@v8
+      with:
+        path: assets
+        merge-multiple: true
+    - run: |
+        (cd assets && sha256sum *.tar.gz >SHA256SUMS) &&
+        if gh release view "$TAG" >/dev/null 2>&1
+        then
+          gh release upload "$TAG" assets/* --clobber
+        else
+          gh release create "$TAG" assets/* --title "$TAG" \
+            --notes-file "Documentation/RelNotes/${TAG#v}.adoc"
+        fi
