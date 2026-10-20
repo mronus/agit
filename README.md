@@ -1,5 +1,5 @@
-[![GitHub build status](https://github.com/git/git/workflows/CI/badge.svg)](https://github.com/git/git/actions?query=branch%3Amaster+event%3Apush)
-[![GitLab build status](https://gitlab.com/git-scm/git/badges/master/pipeline.svg)](https://gitlab.com/git-scm/git/-/pipelines?ref=master)
+[![CI](https://github.com/mronus/agit/actions/workflows/main.yml/badge.svg?branch=master&event=push)](https://github.com/mronus/agit/actions/workflows/main.yml?query=branch%3Amaster+event%3Apush)
+[![Release](https://github.com/mronus/agit/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/mronus/agit/actions/workflows/release.yml?query=event%3Apush)
 
 AGit - agentic, fast, scalable, distributed revision control system
 ===================================================================
