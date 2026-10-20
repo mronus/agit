@@ -378,19 +378,23 @@ made; a writer holds `$GIT_DIR/provenance/journal.lock` while it adds
 an entry.
 
 ------------
-begin <ts> <session> <tree> [model=<model>] [tool=<tool>]
-end <ts> <session> <tree>
-edit <ts> <session> <pre-blob> <post-blob> <path>
-reason <ts> <session> <summary-blob> [<transcript-blob>]
-claim <ts> <session> path <path>
-claim <ts> <session> patch <patch-blob>
+begin <ts> <session> [head=<head>] <tree> [model=<model>] [tool=<tool>]
+end <ts> <session> [head=<head>] <tree>
+edit <ts> <session> [head=<head>] <pre-blob> <post-blob> <path>
+reason <ts> <session> [head=<head>] <summary-blob> [<transcript-blob>]
+claim <ts> <session> [head=<head>] path <path>
+claim <ts> <session> [head=<head>] patch <patch-blob>
 ------------
 
 Fields are separated by a single space.  `<ts>` is the time of the
 stamp, in seconds since the Unix epoch.  `<session>` identifies the
 agent session that made the stamp; it is a non-empty string of the
-characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`.  `<model>` and
-`<tool>` are non-empty and contain no spaces.  A `<path>` is relative
+characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`.  `<head>` is
+the commit that HEAD pointed at when the stamp was made; it is left
+out if HEAD was on an unborn branch.  Entries written by versions that
+did not record it have no `<head>` either; no other field that follows
+the session id starts with `head=`, so the two forms cannot be
+confused.  `<model>` and `<tool>` are non-empty and contain no spaces.  A `<path>` is relative
 to the top of the working tree and is always the last field, so it may
 contain spaces; paths that contain a LF cannot be recorded.  Object ids
 are written in full, as lowercase hexadecimal, in the hash algorithm of

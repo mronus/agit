@@ -30,6 +30,12 @@ struct provenance_journal_entry {
 	timestamp_t time;
 	char *session;
 	/*
+	 * The commit HEAD pointed at when the stamp was made, or the null
+	 * oid if HEAD was unborn or the entry does not say (it was written
+	 * by an earlier version).
+	 */
+	struct object_id head;
+	/*
 	 * BEGIN, END: the snapshot tree.
 	 * EDIT: the pre-image blob.
 	 * REASON: the summary blob.
@@ -60,6 +66,12 @@ struct provenance_journal {
  * the characters [A-Za-z0-9._:-].
  */
 int provenance_session_is_valid(const char *session);
+
+/*
+ * Store in `head` the commit that HEAD of the current worktree of `r`
+ * points at, or the null oid if HEAD is unborn.
+ */
+void provenance_journal_head(struct repository *r, struct object_id *head);
 
 /*
  * Append the serialized form of `e`, without the trailing LF, to

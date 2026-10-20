@@ -94,8 +94,10 @@ COMMANDS
 
 `list [--session <id>]`::
 	Print the entries of the journal, one per line, in the order in
-	which they were recorded.  With `--session`, print only the
-	entries of that session.
+	which they were recorded, in the format of the journal: each
+	entry shows the commit that HEAD pointed at when it was made as
+	`head=<commit>` after the session id.  With `--session`, print
+	only the entries of that session.
 
 OPTIONS
 -------

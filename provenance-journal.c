@@ -11,6 +11,7 @@
 #include "pathspec.h"
 #include "preload-index.h"
 #include "read-cache.h"
+#include "refs.h"
 #include "repository.h"
 #include "sparse-index.h"
 #include "strbuf.h"
@@ -54,11 +55,19 @@ static int is_path(const char *s)
 	return *s && !strchr(s, '\n');
 }
 
+void provenance_journal_head(struct repository *r, struct object_id *head)
+{
+	if (refs_read_ref(get_main_ref_store(r), "HEAD", head))
+		oidclr(head, r->hash_algo);
+}
+
 void provenance_journal_entry_format(const struct provenance_journal_entry *e,
 				     struct strbuf *out)
 {
 	strbuf_addf(out, "%s %"PRItime" %s ", type_names[e->type], e->time,
 		    e->session);
+	if (!is_null_oid(&e->head))
+		strbuf_addf(out, "head=%s ", oid_to_hex(&e->head));
 
 	switch (e->type) {
 	case PROVENANCE_JOURNAL_BEGIN:
@@ -356,6 +365,13 @@ static int parse_entry(const char *line, const struct git_hash_algo *algop,
 	if (!provenance_session_is_valid(e->session))
 		return -1;
 	p = sp + 1;
+
+	/* entries written by an earlier version have no head */
+	if (skip_prefix(p, "head=", &p)) {
+		if (parse_oid_field(&p, algop, &e->head) || *p != ' ')
+			return -1;
+		p++;
+	}
 
 	switch (e->type) {
 	case PROVENANCE_JOURNAL_BEGIN:

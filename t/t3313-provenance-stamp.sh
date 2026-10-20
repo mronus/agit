@@ -7,12 +7,13 @@ test_description='Test git stamp and the provenance capture journal'
 
 . ./test-lib.sh
 
-# Print the journal without the timestamps.
+# Print the journal without the timestamps and the heads.
 #
 # Usage: list_entries [<git-stamp-list-option>...]
 list_entries () {
 	git stamp list "$@" >list.out &&
-	sed -e "s/^\([a-z]*\) [0-9][0-9]* /\1 /" list.out
+	sed -e "s/^\([a-z]*\) [0-9][0-9]* /\1 /" \
+	    -e "s/^\([a-z]* [^ ]*\) head=[0-9a-f]* /\1 /" list.out
 }
 
 # Print the object id in the last <type> entry of the journal.
@@ -330,6 +331,49 @@ test_expect_success 'list skips malformed lines' '
 	test_grep ! "ignoring malformed line 6 " err
 '
 
+test_expect_success 'each stamp records the HEAD it was taken on' '
+	test_when_finished "rm -f .git/provenance/journal" &&
+	head=$(git rev-parse HEAD) &&
+	git stamp begin --session s8 --model m &&
+	git stamp end --session s8 &&
+	cp file1 pre &&
+	git stamp edit --session s8 --path file1 --pre pre &&
+	echo summary | git stamp reason --session s8 --summary - &&
+	git stamp claim --session s8 file1 &&
+	git diff HEAD >patch &&
+	git stamp claim --session s8 --patch patch &&
+	git stamp list >list.out &&
+	sed -e "s/^[a-z]* [0-9]* s8 head=$head .*/ok/" list.out >actual &&
+	test_write_lines ok ok ok ok ok ok >expect &&
+	test_cmp expect actual &&
+	test_grep "^begin [0-9]* s8 head=$head [0-9a-f]* model=m$" list.out &&
+	test_grep "^claim [0-9]* s8 head=$head path file1$" list.out
+'
+
+test_expect_success 'stamps on an unborn branch record no head' '
+	test_when_finished "rm -rf unborn" &&
+	git init unborn &&
+	git -C unborn stamp claim --session s9 file &&
+	git -C unborn stamp list >list.out &&
+	test_grep "^claim [0-9]* s9 path file$" list.out
+'
+
+test_expect_success 'entries without a head are read' '
+	test_when_finished "rm -f .git/provenance/journal" &&
+	mkdir -p .git/provenance &&
+	echo "claim 1 s10 path file1" >.git/provenance/journal &&
+	git stamp claim --session s10 file2 &&
+	git stamp list >list.out 2>err &&
+	test_must_be_empty err &&
+	cat >expect <<-EOF &&
+	claim 1 s10 path file1
+	EOF
+	head -n 1 list.out >actual &&
+	test_cmp expect actual &&
+	test_line_count = 2 list.out &&
+	test_grep "^claim [0-9]* s10 head=$(git rev-parse HEAD) path file2$" list.out
+'
+
 test_expect_success 'linked worktrees have their own journal' '
 	test_when_finished "rm -f .git/provenance/journal" &&
 	git worktree add wt &&
@@ -347,8 +391,8 @@ test_expect_success 'linked worktrees have their own journal' '
 	git -C wt stamp list >list.out &&
 	test_line_count = 2 list.out &&
 	test_grep ! main list.out &&
-	begin=$(sed -n "s/^begin [^ ]* linked \(.*\)/\1/p" list.out) &&
-	end=$(sed -n "s/^end [^ ]* linked \(.*\)/\1/p" list.out) &&
+	begin=$(sed -n "s/^begin [^ ]* linked head=[^ ]* \(.*\)/\1/p" list.out) &&
+	end=$(sed -n "s/^end [^ ]* linked head=[^ ]* \(.*\)/\1/p" list.out) &&
 	echo file1 >expect &&
 	git diff-tree --name-only $begin $end >actual &&
 	test_cmp expect actual

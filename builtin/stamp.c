@@ -56,6 +56,7 @@ static int append(struct repository *repo,
 {
 	e->time = time(NULL);
 	e->session = (char *)session;
+	provenance_journal_head(repo, &e->head);
 	return provenance_journal_append(repo, e) ? 1 : 0;
 }
 
