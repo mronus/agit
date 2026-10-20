@@ -1,0 +1,5 @@
+version 1
+commit 9af0fcb581050836c3362bf75e1e4881bc709a13
+session 683d44a8-1e69-4001-a42d-411f2e7d0951 model=claude-opus-5-5 tool=claude-code started=1792470553 ended=1792471164
+
+Rewrote the README for AGit at the owner's request: it now explains what AGit records, how to install it with the one-line installer from mronus/agit-setup, how agents are connected, the commands that show provenance, how records travel with remotes, versions, documentation and license. The Git-only material (tutorials, mailing list, the origin of the name) is replaced by a link to Git's own README and git-scm.com.
