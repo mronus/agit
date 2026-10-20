@@ -1,0 +1,5 @@
+version 1
+commit 2f1eb5821990e6ff5ae527069f1eec74f3b34080
+session 683d44a8-1e69-4001-a42d-411f2e7d0951 model=claude-opus-5-5 tool=claude-code started=1792470369 ended=1792470385
+
+Retitled the README as AGit, the agentic distribution of Git, at the owner's request. Removed the upstream introduction of Git (what Git is, its license and origin) and the separate agit heading, so the README opens with what this repository is.
