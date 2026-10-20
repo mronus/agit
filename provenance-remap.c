@@ -186,7 +186,7 @@ static int reattach(struct repository *r, struct commit *commit,
 	rw.adopt = 1;
 	if (provenance_commit_records(r, commit->parents,
 				      get_commit_tree_oid(commit), ident,
-				      NULL, &rw, &lines, &reasoning))
+				      NULL, &rw, NULL, &lines, &reasoning))
 		goto out;
 	oidcpy(&lines.commit, &commit->object.oid);
 	provenance_record_format(&lines, out);

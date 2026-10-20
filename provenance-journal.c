@@ -1,12 +1,15 @@
 #include "git-compat-util.h"
 #include "provenance-journal.h"
 #include "cache-tree.h"
+#include "commit.h"
+#include "commit-reach.h"
 #include "dir.h"
 #include "gettext.h"
 #include "hex.h"
 #include "lockfile.h"
 #include "odb.h"
 #include "odb/transaction.h"
+#include "oidset.h"
 #include "path.h"
 #include "pathspec.h"
 #include "preload-index.h"
@@ -220,32 +223,123 @@ out:
 	return ret;
 }
 
-int provenance_journal_clear(struct repository *r)
+/* The tips of the branches of a repository, read when first needed. */
+struct branch_tips {
+	struct repository *r;
+	struct commit **tips;
+	size_t nr, alloc;
+	unsigned read : 1;
+};
+
+static int add_branch_tip(const struct reference *ref, void *data)
+{
+	struct branch_tips *bt = data;
+	struct commit *commit;
+
+	commit = lookup_commit_reference_gently(bt->r, ref->oid, 1);
+	if (commit) {
+		ALLOC_GROW(bt->tips, bt->nr + 1, bt->alloc);
+		bt->tips[bt->nr++] = commit;
+	}
+	return 0;
+}
+
+/* Whether a branch of `r` reaches the commit `oid`. */
+static int on_a_branch(struct repository *r, struct branch_tips *bt,
+		       const struct object_id *oid)
+{
+	struct commit *commit = lookup_commit_reference_gently(r, oid, 1);
+
+	if (!commit)
+		return 0;
+	if (!bt->read) {
+		refs_for_each_branch_ref(get_main_ref_store(r),
+					 add_branch_tip, bt);
+		bt->read = 1;
+	}
+	return repo_in_merge_bases_many(r, commit, bt->nr, bt->tips, 1) > 0;
+}
+
+int provenance_journal_consume(struct repository *r,
+			       const struct provenance_journal *j,
+			       const struct object_id *commit, int partial)
 {
 	struct lock_file lk = LOCK_INIT;
+	struct strbuf buf = STRBUF_INIT, out = STRBUF_INIT;
+	struct branch_tips bt = { .r = r };
+	struct oidset reached = OIDSET_INIT, lost = OIDSET_INIT;
 	char *path = repo_git_path(r, "provenance/journal");
 	char *picks = repo_git_path(r, "provenance/picks");
+	const char *rest;
 	int ret = 0;
 
-	if (!file_exists(path) && !file_exists(picks))
+	if (!file_exists(path) && (partial || !file_exists(picks)))
 		goto out;
-	if (repo_hold_lock_file_for_update_timeout(r, &lk, path, 0,
+	if (repo_hold_lock_file_for_update_timeout(r, &lk, path,
+						   LOCK_REPORT_ON_ERROR,
 						   JOURNAL_LOCK_TIMEOUT_MS) < 0) {
 		ret = -1;
 		goto out;
 	}
-	if ((unlink(path) && errno != ENOENT) ||
-	    (unlink(picks) && errno != ENOENT)) {
-		int saved_errno = errno;
-
-		ret = -1;
-		rollback_lock_file(&lk);
-		errno = saved_errno;
+	if (strbuf_read_file(&buf, path, 0) < 0 && errno != ENOENT) {
+		ret = error_errno(_("unable to read '%s'"), path);
 		goto out;
 	}
-	rollback_lock_file(&lk);
+
+	for (size_t i = 0; i < j->nr; i++) {
+		struct provenance_journal_entry e = j->entries[i];
+
+		if (e.crossing)
+			continue;
+		if (!e.foreign) {
+			if (!partial)
+				continue;
+			/* the paths left out are as they were */
+			oidcpy(&e.head, commit);
+		} else if (e.used && !partial) {
+			continue;
+		} else if (oidset_contains(&lost, &e.head)) {
+			continue;
+		} else if (!oidset_contains(&reached, &e.head)) {
+			if (!on_a_branch(r, &bt, &e.head)) {
+				oidset_insert(&lost, &e.head);
+				continue;
+			}
+			oidset_insert(&reached, &e.head);
+		}
+		provenance_journal_entry_format(&e, &out);
+		strbuf_addch(&out, '\n');
+	}
+
+	/* keep what was appended since the journal was read */
+	rest = buf.buf;
+	for (size_t i = 0; i < j->lines && *rest; i++) {
+		const char *eol = strchrnul(rest, '\n');
+
+		rest = *eol ? eol + 1 : eol;
+	}
+	strbuf_addstr(&out, rest);
+	strbuf_complete_line(&out);
+
+	if (!out.len) {
+		if (unlink(path) && errno != ENOENT)
+			ret = error_errno(_("unable to remove '%s'"), path);
+	} else if (write_in_full(get_lock_file_fd(&lk), out.buf, out.len) < 0) {
+		ret = error_errno(_("unable to write '%s'"),
+				  get_lock_file_path(&lk));
+	} else if (commit_lock_file(&lk)) {
+		ret = error_errno(_("unable to write '%s'"), path);
+	}
+	if (!ret && !partial && unlink(picks) && errno != ENOENT)
+		ret = error_errno(_("unable to remove '%s'"), picks);
 
 out:
+	rollback_lock_file(&lk);
+	strbuf_release(&buf);
+	strbuf_release(&out);
+	oidset_clear(&reached);
+	oidset_clear(&lost);
+	free(bt.tips);
 	free(path);
 	free(picks);
 	return ret;
@@ -467,6 +561,7 @@ int provenance_journal_read(struct repository *r,
 		}
 		j->nr++;
 	}
+	j->lines = lineno;
 
 out:
 	strbuf_release(&buf);

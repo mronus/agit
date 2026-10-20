@@ -603,8 +603,8 @@ or a revert of it would, in the order in which they were applied.  A
 commit that concludes such a revert takes the reverted commits from
 this list alone.  The reasoning of a picked commit is attached only if
 a line is taken from it, as its changes may have been discarded.
-Every commit forgets these picks and reverts, as it empties the
-capture journal.
+Every commit forgets these picks and reverts as it consumes the
+capture journal, unless it is a partial commit.
 
 A commit that concludes a merge (see linkgit:git-merge[1]) records
 only what the merge itself wrote, such as its conflict resolutions:

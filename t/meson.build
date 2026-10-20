@@ -382,6 +382,7 @@ integration_tests = [
   't3322-provenance-purge.sh',
   't3323-provenance-stat.sh',
   't3324-provenance-remap.sh',
+  't3325-provenance-head.sh',
   't3400-rebase.sh',
   't3401-rebase-and-am-rename.sh',
   't3402-rebase-merge.sh',

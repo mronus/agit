@@ -52,11 +52,28 @@ struct provenance_journal_entry {
 	char *tool;
 	/* EDIT, CLAIM_PATH */
 	char *path;
+
+	/*
+	 * Set by the attribution of a commit (see the "Attribution"
+	 * section of Documentation/technical/git-provenance.adoc) for
+	 * provenance_journal_consume():
+	 *
+	 * foreign: the stamp was taken on another commit than the one
+	 * HEAD points at;
+	 * crossing: the entry is the "begin" or the "end" of an interval
+	 * during which HEAD moved, which is ignored;
+	 * used: the entry is foreign and the commit used it.
+	 */
+	unsigned foreign : 1;
+	unsigned crossing : 1;
+	unsigned used : 1;
 };
 
 struct provenance_journal {
 	struct provenance_journal_entry *entries;
 	size_t nr, alloc;
+	/* the number of lines read, malformed ones included */
+	size_t lines;
 };
 
 #define PROVENANCE_JOURNAL_INIT { 0 }
@@ -90,12 +107,25 @@ int provenance_journal_append(struct repository *r,
 			      const struct provenance_journal_entry *e);
 
 /*
- * Remove the journal of the current worktree of `r`, and its picks
- * (see provenance_picks_append()), holding the journal's lock while
- * doing so.  A missing journal or picks file is not an error.  Returns
- * 0 on success, or -1 with errno set, without reporting the error.
+ * Remove from the journal of the current worktree of `r` the entries
+ * of `j` that the commit `commit` consumed, holding the journal's lock
+ * while doing so.  `j` is the journal as it was read for the
+ * attribution of the commit, which marked its entries; entries
+ * appended to the journal since it was read are kept.
+ *
+ * The commit consumes the entries taken on the commit HEAD pointed at
+ * while it was made, and those without a head, unless it is
+ * `partial`: a partial commit keeps them, as taken on `commit`.
+ * Every commit drops the entries of intervals during which HEAD
+ * moved, and the foreign entries taken on a commit that no branch
+ * reaches; a commit that is not `partial` also consumes the foreign
+ * entries it used, and removes the picks (see
+ * provenance_picks_append()).  The journal is removed if no entry is
+ * left.  Returns 0 on success, or -1 after reporting an error.
  */
-int provenance_journal_clear(struct repository *r);
+int provenance_journal_consume(struct repository *r,
+			       const struct provenance_journal *j,
+			       const struct object_id *commit, int partial);
 
 /*
  * The picks of a worktree are the commits that "cherry-pick

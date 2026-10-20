@@ -76,7 +76,14 @@ struct provenance_rewrite {
  * provenance_attribute().  The lines that the commit takes from a
  * commit without a line record are UNKNOWN; a line record that cannot
  * be parsed is ignored with a warning.  Returns 0 on success, or -1
- * after reporting an error.  The journal is left alone.
+ * after reporting an error.
+ *
+ * The journal of the worktree is read into `journal`, which must have
+ * been initialized with PROVENANCE_JOURNAL_INIT, and its entries are
+ * marked as the attribution uses them; it is left alone otherwise.
+ * Once the commit is made, provenance_journal_consume() removes what
+ * it consumed.  `journal` may be NULL if the journal is not to be
+ * consumed.
  */
 int provenance_commit_records(struct repository *r,
 			      const struct commit_list *parents,
@@ -84,6 +91,7 @@ int provenance_commit_records(struct repository *r,
 			      const char *author,
 			      const char *session,
 			      const struct provenance_rewrite *rw,
+			      struct provenance_journal *journal,
 			      struct provenance_record *lines,
 			      struct provenance_reasoning *reasoning);
 

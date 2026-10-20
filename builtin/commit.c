@@ -1786,6 +1786,7 @@ static int records_lines(const struct provenance_record *lines)
 static void compute_provenance(struct commit_list *parents,
 			       const char *author_ident,
 			       const struct provenance_rewrite *rw,
+			       struct provenance_journal *journal,
 			       struct provenance_record *lines,
 			       struct provenance_reasoning *reasoning)
 {
@@ -1794,7 +1795,7 @@ static void compute_provenance(struct commit_list *parents,
 	if (provenance_commit_records(the_repository, parents,
 				      &the_repository->index->cache_tree->oid,
 				      author_ident, provenance_session, rw,
-				      lines, reasoning)) {
+				      journal, lines, reasoning)) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
 	}
@@ -1918,6 +1919,7 @@ int cmd_commit(int argc,
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
 	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
+	struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 	int record_provenance;
 	int ret = 0;
 
@@ -2065,7 +2067,7 @@ int cmd_commit(int argc,
 
 		determine_rewrite(current_head, &rw);
 		compute_provenance(parents, author_ident.buf, &rw,
-				   &prov_lines, &prov_reasoning);
+				   &prov_journal, &prov_lines, &prov_reasoning);
 		provenance_picks_release(&rw.picks);
 	}
 
@@ -2104,9 +2106,10 @@ int cmd_commit(int argc,
 	 * The commit has consumed the journal, unless it was partial:
 	 * the stamps may then be needed for the paths left out.
 	 */
-	if (record_provenance && !argc && !pathspec_from_file && !only &&
-	    !also && provenance_journal_clear(the_repository))
-		warning_errno(_("unable to clear the provenance journal"));
+	if (record_provenance)
+		provenance_journal_consume(the_repository, &prov_journal, &oid,
+					   argc || pathspec_from_file ||
+					   only || also);
 
 	sequencer_post_commit_cleanup(the_repository, 0);
 	unlink(git_path_merge_head(the_repository));
@@ -2151,6 +2154,7 @@ int cmd_commit(int argc,
 cleanup:
 	provenance_record_release(&prov_lines);
 	provenance_reasoning_release(&prov_reasoning);
+	provenance_journal_release(&prov_journal);
 	free_commit_extra_headers(extra);
 	commit_list_free(parents);
 	strbuf_release(&author_ident);

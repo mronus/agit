@@ -434,14 +434,41 @@ prune them; a reader must treat entries whose objects are missing as
 having no content.  A reader ignores lines that do not parse, with a
 warning.
 
+An entry was taken on the commit that HEAD points at while a commit
+is made (for `git commit --amend`, the commit being amended) if its
+`<head>` names that commit or it has no `<head>`; any other entry is
+foreign.  The `begin` and the `end` of an interval are paired as for
+the attribution, the `end` with the latest `begin` of its session
+before it; if their `<head>` fields name different commits, HEAD
+moved during the interval, and both entries are ignored.  If only one
+of them has a `<head>`, it decides for both.
+
 `git commit` consumes the journal: after it has recorded the
-provenance of a commit, it removes the journal while holding the lock.
-A partial commit, made with a pathspec, `--only` or `--include`, keeps
-the journal, as its stamps may be needed for the paths left out.  Any
-other commit consumes all the stamps, including those for changes it
-does not include, such as changes left unstaged by `git add -p`; lines
-from those changes are `HUMAN` when they are committed later.  The
-commit skips entries whose objects are missing with a warning.
+provenance of a commit, it rewrites the journal while holding the
+lock, without the entries it consumed, and removes it if no entry is
+left.  Entries appended while the commit was made are kept.
+
+- A partial commit, made with a pathspec, `--only` or `--include`,
+  keeps the entries taken on HEAD, as they may be needed for the paths
+  left out, with the new commit as their `<head>`: the paths left out
+  are as they were.  Any other commit consumes them all, including
+  those for changes it does not include, such as changes left
+  unstaged by `git add -p`; lines from those changes are `HUMAN` when
+  they are committed later.
+
+- The entries of an interval during which HEAD moved are dropped.
+
+- A commit that is not partial consumes the foreign entries it used:
+  the `begin` and `end` entries of an interval and the `edit` entries
+  that gave a line of the commit to their session, and the `reason`
+  and `claim ... patch` entries of the sessions attached to the
+  commit.  The other foreign entries stay, to be used once HEAD is
+  back on their commit, unless no branch (`refs/heads/*`) reaches the
+  commit that their `<head>` names: such entries are dropped.  This is
+  only checked when foreign entries are left, with the reachability
+  helpers that a commit-graph speeds up.
+
+The commit skips entries whose objects are missing with a warning.
 
 Next to the journal, `$GIT_DIR/provenance/picks` lists the commits
 that `git cherry-pick --no-commit` applied and `git revert
@@ -461,8 +488,8 @@ reverted, each with its full object id; a line holding an object id
 alone is a `pick`.  `cherry-pick`, `revert` and `merge` append to it
 while holding `$GIT_DIR/provenance/journal.lock`, and only when
 provenance is enabled.  A reader ignores lines that do not parse, with
-a warning.  The commits that remove the journal remove
-this file with it, and only they: `git stamp` leaves it alone.  Like
+a warning.  The commits that consume the journal, unless they are
+partial, remove this file, and only they: `git stamp` leaves it alone.  Like
 the journal, it is never transferred.
 
 
