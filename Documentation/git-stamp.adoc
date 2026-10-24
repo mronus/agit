@@ -90,7 +90,9 @@ COMMANDS
 `reason --session <id> --summary <file> [--transcript <file>]`::
 	Record the summary of the work of the session, and optionally its
 	transcript.  If _<file>_ is `-` for `--summary`, the summary is
-	read from the standard input.
+	read from the standard input.  `git commit` warns about a
+	commit with lines of an AI session and no summary (see
+	linkgit:git-commit[1]).
 
 `claim --session <id> (--patch <file> | [--] <path>...)`::
 	Declare that the session wrote the changes to the given paths, or

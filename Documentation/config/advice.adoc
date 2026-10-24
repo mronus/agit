@@ -79,6 +79,11 @@ all advice messages.
 		rewritten `refs/provenance/reasoning`, to say how to
 		replace the ref of a remote and drop the purged records
 		from the repository.
+	provenanceReason::
+		Shown when linkgit:git-commit[1] warns that a commit has
+		lines written by an AI agent session but no reasoning
+		summary, to say how to record the summary with
+		linkgit:git-stamp[1] `reason` and amend the commit.
 	provenanceSession::
 		Shown when linkgit:git-commit[1] records provenance for a
 		commit that no AI agent session is linked to, to say that

@@ -241,8 +241,74 @@ test_expect_success 'stamps without --session give no advice' '
 	echo 8 >>file &&
 	git stamp end --session s1 &&
 	git commit -a -m ai 2>err &&
-	test_grep ! "hint:" err &&
+	test_grep ! "hint: no session" err &&
 	git provenance verify HEAD
+'
+
+test_expect_success 'AI lines without a reason give a warning' '
+	test_when_finished "rm -rf repo" &&
+	git init repo &&
+	(
+		cd repo &&
+		echo one >file &&
+		git add file &&
+		git commit -m human 2>err &&
+		test_grep ! "no reasoning" err &&
+		git stamp begin --session s1 &&
+		echo two >>file &&
+		git stamp end --session s1 &&
+		git commit -a -m ai 2>err &&
+		cat >expect <<-EOF &&
+		warning: commit $(git rev-parse --short HEAD) has lines written by AI session s1 but no reasoning
+		hint: record why with \`git stamp reason --session s1 --summary -\`,
+		hint: then \`git commit --amend --no-edit\` if the commit is not pushed yet
+		hint: Disable this message with "git config set advice.provenanceReason false"
+		EOF
+		grep -e "^warning:" -e "^hint:" err >actual &&
+		test_cmp expect actual &&
+		echo "The summary." | git stamp reason --session s1 --summary - &&
+		git commit --amend --no-edit 2>err &&
+		test_grep ! "no reasoning" err &&
+		git provenance show --reasoning HEAD >actual &&
+		test_grep "^The summary.$" actual &&
+		git commit --amend -m amended 2>err &&
+		test_grep ! "no reasoning" err
+	)
+'
+
+test_expect_success 'a reason silences the warning' '
+	test_when_finished "rm -rf repo" &&
+	git init repo &&
+	(
+		cd repo &&
+		git stamp begin --session s1 &&
+		echo one >file &&
+		git stamp end --session s1 &&
+		echo "The summary." | git stamp reason --session s1 --summary - &&
+		git add file &&
+		git commit -m ai 2>err &&
+		test_grep ! "no reasoning" err
+	)
+'
+
+test_expect_success 'the warning names each AI session and ignores --quiet' '
+	test_when_finished "rm -rf repo" &&
+	git init repo &&
+	(
+		cd repo &&
+		git config advice.provenanceReason false &&
+		git stamp begin --session s1 &&
+		echo one >file &&
+		git stamp end --session s1 &&
+		git stamp begin --session s2 &&
+		echo two >>file &&
+		git stamp end --session s2 &&
+		git add file &&
+		git commit -q -m ai 2>err &&
+		test_grep "AI session s1 but no reasoning" err &&
+		test_grep "AI session s2 but no reasoning" err &&
+		test_grep ! "hint:" err
+	)
 '
 
 test_expect_success '--session must be valid' '
@@ -380,7 +446,7 @@ test_expect_success '--session without stamps declares everything' '
 	echo b >>binary &&
 	git commit -a -m declared --session s8 2>err &&
 	test_grep "session .s8. has no stamps in the journal" err &&
-	test_grep ! "hint:" err &&
+	test_grep ! "hint: no session" err &&
 	{
 		header HEAD declared &&
 		echo "actor s8 ai model=unknown tool=unknown session=s8 source=declared" &&
@@ -591,7 +657,7 @@ test_expect_success 'a conflicted merge concluded with commit records its resolu
 	test_write_lines 1 R2 3 4 6 7 8 9 SIDE >merged &&
 	git stamp end --session s15 &&
 	git commit -a --no-edit 2>err &&
-	test_grep ! "hint:" err &&
+	test_grep ! "hint: no session" err &&
 	{
 		header HEAD &&
 		echo "$human_actor" &&
