@@ -1,0 +1,26 @@
+version 1
+commit 05c4550d536e11f1acdfce8b87df714078653598
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file Documentation/config/advice.adoc
++ 82-86 HUMAN human dfb35e0daca203b280f9c242c3d260111c7e4f7e
+file Documentation/git-commit.adoc
++ 624-630 HUMAN human 83dec07e5b602214dc4f776a60b879c35fa6e998
+file Documentation/git-stamp.adoc
++ 93-95 HUMAN human d7b2b6350575c644f6d1e943a83f6d7d94784934
+- 93 HUMAN human 65dfa27f02fa26551e533de7bff83a1f6214aea5
+file advice.c
++ 68 HUMAN human 8aabb45625a92c126cc8fc6c74f82feebb05bdc8
+file advice.h
++ 35 HUMAN human d0eb9325c8ab1b3fe4ab81de65f6b3b145b8201a
+file builtin/commit.c
++ 1781-1808 HUMAN human aa99c57a825a227fa23d50540af8775c2839ea2c
++ 2178-2179 HUMAN human f80f3083f73a6a2a0c0ce7f435111e712b7218d7
+file t/t3314-provenance-commit.sh
++ 244 HUMAN human 9bfc989e8392f0adb6e8fd472b7ace2dbb290d0e
++ 248-313 HUMAN human 61664251a32dd47126a4edef507e6aa4cb1516da
++ 449 HUMAN human 9bfc989e8392f0adb6e8fd472b7ace2dbb290d0e
++ 660 HUMAN human 9bfc989e8392f0adb6e8fd472b7ace2dbb290d0e
+- 244 HUMAN human 420250b35746b38f4148d01bb60084f78eb09ebb
+- 383 HUMAN human 420250b35746b38f4148d01bb60084f78eb09ebb
+- 594 HUMAN human 420250b35746b38f4148d01bb60084f78eb09ebb
