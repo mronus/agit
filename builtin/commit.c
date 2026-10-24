@@ -1778,6 +1778,34 @@ static int records_lines(const struct provenance_record *lines)
 }
 
 /*
+ * Warn if the line record `lines` of the commit `oid` has lines of an
+ * AI session but `reasoning` has no summary.  The summary is shared by
+ * all the sessions of a commit, so each of its AI sessions is named.
+ */
+static void warn_missing_reasoning(const struct object_id *oid,
+				   const struct provenance_record *lines,
+				   const struct provenance_reasoning *reasoning)
+{
+	const char *session = NULL;
+
+	if (reasoning->summary.len)
+		return;
+	for (size_t i = 0; i < lines->actors_nr; i++) {
+		if (lines->actors[i].kind != PROVENANCE_ACTOR_AI)
+			continue;
+		session = lines->actors[i].session;
+		warning(_("commit %s has lines written by AI session %s but no reasoning"),
+			repo_find_unique_abbrev(the_repository, oid, DEFAULT_ABBREV),
+			session);
+	}
+	if (session)
+		advise_if_enabled(ADVICE_PROVENANCE_REASON,
+				  _("record why with `git stamp reason --session %s --summary -`,\n"
+				    "then `git commit --amend --no-edit` if the commit is not pushed yet"),
+				  session);
+}
+
+/*
  * Compute the records of the commit about to be made, with the parents
  * `parents`, carrying over those of the commits that `rw` names.  Dies
  * if provenance.require is set and no session is linked to a commit
@@ -2147,6 +2175,8 @@ int cmd_commit(int argc,
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"
 				    "LLM session, provide its details with --session"));
+	if (record_provenance)
+		warn_missing_reasoning(&oid, &prov_lines, &prov_reasoning);
 
 	apply_autostash_ref(the_repository, "MERGE_AUTOSTASH",
 			    NULL, NULL, NULL, NULL);
