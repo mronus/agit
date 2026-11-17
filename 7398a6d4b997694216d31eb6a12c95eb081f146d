@@ -1,0 +1,50 @@
+version 1
+commit 7398a6d4b997694216d31eb6a12c95eb081f146d
+session a0256ef8-d274-460b-a4e6-84682b59e3d3 model=claude-opus-5-5 tool=claude-code started=1794945846 ended=1794946297
+
+Request: I want you to handle the adapter part too in the ../agit-setup repo
+
+[...] rom `origin/main`. The session context will no longer tell agents to run `git stamp reason`. It also drops the `AGIT_SESSION` export, which only that command used, and cleans the README and tests. Those tests still have to pass against the current `2.56.0.agit.2` release, so this PR can be merged first.
+
+Both open PRs and don't wait for CI. I'll check the CI runs and review the diffs before calling either PR good.
+
+**Waiting on you:**
+- **Old warning branch:** the permission check blocked deleting `agit/warn-missing-reasoning` locally and on origin. To drop it, run:
+  `! git branch -D agit/warn-missing-reasoning && git push origin --delete agit/warn-missing-reasoning`
+  Your checkout is now on master.
+- **Reasoning ref on origin:** `refs/provenance/reasoning` still exists there. After the agit PR merges I'd delete it with `git push origin :refs/provenance/reasoning`. Do you want that?
+- **Release:** `2.56.0.agit.3` would follow the merge as its own PR, with release notes telling users they can delete their local reasoning ref.
+
+I also recorded the decision in my project memory.
+
+I'll check two claims in that report before relaying it: that the repo moved, and that the release `git commit` warns about missing reasoning.
+
+The adapter diff is clean. One nit: the README intro line was re-wrapped to about 95 columns. I'll fix that on the PR branch, then update the repo-name memory.
+
+The force-push was blocked. I'll put the fix in a separate small commit instead, after checking whether the edit was applied.
+
+Now I'll record the repo move in memory.
+
+The agit-setup PR is open: https://github.com/regentis/agit-setup/pull/8. The agit PR is still being built by its subagent.
+
+**agit-setup PR**
+- **Session context:** agents are no longer told to run `git stamp reason`. The new text is: *"This machine's git is agit: each commit records which of its lines an AI wrote. Hooks record your edits. Edit files and commit in separate commands; edits made in the commit's own command are not recorded. Do not pass `--session` to `git commit`, and never run `git stamp begin`, `end` or `edit`."*
+- **Removed:**
+  - the `AGIT_SESSION` export, which only existed for that command
+  - "and why" wording in `agit-setup --help`, the README and the plugin/extension manifests
+  - the reasoning tests
+- **Plugin version:** bumped to 0.3.0 so Claude Code reloads its cached copy.
+- **Kept:** the old `pre-commit` hook event still exists and does nothing, because older plugins may still call it.
+- **Tests:** `hook-test.sh` and `setup-test.sh` pass locally against `2.56.0.agit.2`. Shellcheck isn't installed here; the CI shellcheck job passed.
+- **CI:** the Linux and container jobs had passed on the first push. I then pushed a small README rewrap commit (the subagent left one line at about 95 columns), so CI is running again.
+- **Can merge now:** the release you have today never warned about missing reasoning; that warning was only on the unmerged branch. The subagent's note that agents might see it is wrong.
+
+**Left as is (your call):** `test/setup-test.sh` still checks that the options removed earlier (`hook.reason`, `--no-reason`) stay gone. These are guards, not reasoning features; say if you want them deleted too.
+
+**Repos moved:** both repos are now under `regentis` (`regentis/agit`, `regentis/agit-setup`). The old `mronus/*` names redirect. I updated my memory to use the new names.
+
+**Still waiting on you:**
+1. Deleting the `agit/warn-missing-reasoning` branch was blocked by the permission check. To run it yourself: `! git branch -D agit/warn-missing-reasoning && git push origin --delete agit/warn-missing-reasoning`
+2. After the agit PR merges, should I delete `refs/provenance/reasoning` on origin?
+
+When the agit subagent reports back I'll review its diff and check its CI run before calling it good.
