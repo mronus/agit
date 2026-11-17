@@ -4,13 +4,12 @@
 AGit - agentic, fast, scalable, distributed revision control system
 ===================================================================
 
-AGit is Git with the *provenance* extension. For every commit it
-records why the change was made and, for every changed line, who wrote
-it: an AI agent, a human, or both. The records live in notes-style refs
-under `refs/provenance/`, outside the commit objects, so an AGit
-repository stays a plain Git repository that any Git client and any
-hosting service can work with. The executable is `git`, and everything
-Git does works as before.
+AGit is Git with the *provenance* extension. For every line a commit
+changes, it records who wrote it: an AI agent, a human, or both. The
+records live in a notes-style ref under `refs/provenance/`, outside the
+commit objects, so an AGit repository stays a plain Git repository that
+any Git client and any hosting service can work with. The executable is
+`git`, and everything Git does works as before.
 
 Install
 -------
@@ -53,25 +52,24 @@ history from before AGit or commits made by other Git versions).
     git blame --provenance <file>          # who wrote each line of a file
     git log --format='%h %(provenance:share) %s'
                                            # the AI share of each commit
-    git provenance show [--reasoning] <commit>
-                                           # the line record, or the reasoning
+    git provenance show <commit>           # the line record of a commit
     git provenance stat <range>            # totals by mark over a range
 
 Rebases, cherry-picks, reverts, merges, amends, `git am` and
 `format-patch` carry the records along with the commits. `git
 provenance adopt` gives records to commits made without them, and
 [git-provenance(1)][] covers the rest: verifying, remapping after a
-`fast-import`, purging reasoning, pruning and statistics.
+`fast-import`, pruning and statistics.
 
 Remotes
 -------
 
 `git fetch`, `git pull`, `git push` and `git clone` carry the records
 with the branches: when a branch is pushed, its records go along to the
-same remote. Hosting services store the refs but do not show them. With
-a Git without the extension, fetch them explicitly:
+same remote. Hosting services store the ref but do not show it. With
+a Git without the extension, fetch it explicitly:
 
-    git fetch origin 'refs/provenance/*:refs/provenance/*'
+    git fetch origin refs/provenance/lines:refs/provenance/lines
 
 Commits created by a hosting service, such as the merge commit of a
 pull request, have no record of their own; the commits they merge keep
