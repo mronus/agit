@@ -217,10 +217,10 @@ include::signoff-option.adoc[]
 
 `--session <id>`::
 	The id of the AI agent session that made the change.  Its
-	stamps in the capture journal (see linkgit:git-stamp[1]) and its
-	reasoning are attached to the commit as provenance.  If the
-	journal has no stamps for the session, its changes are recorded
-	as declared by it.  See `provenance.*` in linkgit:git-config[1].
+	stamps in the capture journal (see linkgit:git-stamp[1]) tell
+	which lines of the commit it wrote.  If the journal has no
+	stamps for the session, its changes are recorded as declared by
+	it.  See `provenance.*` in linkgit:git-config[1].
 
 `-n`::
 `--verify`::
@@ -569,41 +569,36 @@ PROVENANCE
 If provenance is enabled (see `provenance.enabled` in
 linkgit:git-config[1]), `git commit` records which lines of the
 commit were written by an AI agent, by a human, or by both, from the
-stamps of the capture journal (see linkgit:git-stamp[1]), and the
-reasoning of the agent sessions involved (see
-linkgit:git-provenance[1]).
+stamps of the capture journal (see linkgit:git-stamp[1]), as the line
+record of the commit (see linkgit:git-provenance[1]).
 
-With `--amend`, the records of the amended commit are carried over:
+With `--amend`, the line record of the amended commit is carried over:
 lines that the amendment leaves alone keep their marks, lines it
 changes belong to the agent session whose stamps changed them or to
-the human, and an AI line edited by the human becomes `MIXED`.  The
-reasoning names the sessions of the amended commit, followed by those
-that the journal attaches, with their summaries in that order.  If the
+the human, and an AI line edited by the human becomes `MIXED`.  If the
 amended commit has no line record, as when it was made with a Git that
 does not record them, the lines it added are `UNKNOWN`, even where the
 amendment edits them, and the lines the amendment adds are recorded
 as in any other commit.
 
 A commit that concludes a cherry-pick, a revert or a rebase that
-stopped with conflicts carries the records of the commit being picked
-or reverted, as linkgit:git-cherry-pick[1] and linkgit:git-revert[1]
+stopped with conflicts carries the line record of the commit being
+picked or reverted, as linkgit:git-cherry-pick[1] and linkgit:git-revert[1]
 describe.  If that commit has no line record, the lines taken from it
 are `UNKNOWN`.
 
 A commit made while an interactive rebase is stopped at a `fixup` or
-`squash` command whose changes conflict carries the records of the
-commit of that command.  With `--amend`, it unites them with those of
+`squash` command whose changes conflict carries the line record of the
+commit of that command.  With `--amend`, it unites it with that of
 `HEAD`, as `git rebase --continue` would (see linkgit:git-rebase[1]);
-without it, it carries them as a cherry-pick does.
+without it, it carries it as a cherry-pick does.
 
-A commit also carries the records of the commits that `git cherry-pick
---no-commit` applied and that `git revert --no-commit` reverted since
+A commit also carries the line records of the commits that `git
+cherry-pick --no-commit` applied and that `git revert --no-commit` reverted since
 the previous commit, after those named above, each as a cherry-pick
 or a revert of it would, in the order in which they were applied.  A
 commit that concludes such a revert takes the reverted commits from
-this list alone.  The reasoning of a picked commit is attached only if
-a line is taken from it, as its changes may have been discarded.
-Every commit forgets these picks and reverts as it consumes the
+this list alone.  Every commit forgets these picks and reverts as it consumes the
 capture journal, unless it is a partial commit.
 
 A commit that concludes a merge (see linkgit:git-merge[1]) records
@@ -620,13 +615,6 @@ The advice given for a commit made without `--session` (see
 of `provenance.require` do not apply to a commit whose line record has
 no range at all, such as an empty commit or a merge that resolved
 nothing.  `--quiet` suppresses the advice, but not the refusal.
-
-If the line record of the new commit names an AI agent session but
-its reasoning has no summary, `git commit` warns, naming each AI
-session of the commit, and says how to add the summary: record it
-with `git stamp reason`, then amend the commit with `--amend
---no-edit`.  The warning is given with `--quiet` too; the advice that
-follows it can be turned off with `advice.provenanceReason`.
 
 ENVIRONMENT AND CONFIGURATION VARIABLES
 ---------------------------------------

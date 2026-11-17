@@ -19,7 +19,6 @@ enum provenance_journal_type {
 	PROVENANCE_JOURNAL_BEGIN,
 	PROVENANCE_JOURNAL_END,
 	PROVENANCE_JOURNAL_EDIT,
-	PROVENANCE_JOURNAL_REASON,
 	PROVENANCE_JOURNAL_CLAIM_PATH,
 	PROVENANCE_JOURNAL_CLAIM_PATCH,
 };
@@ -38,14 +37,10 @@ struct provenance_journal_entry {
 	/*
 	 * BEGIN, END: the snapshot tree.
 	 * EDIT: the pre-image blob.
-	 * REASON: the summary blob.
 	 * CLAIM_PATCH: the patch blob.
 	 */
 	struct object_id oid;
-	/*
-	 * EDIT: the post-image blob.
-	 * REASON: the transcript blob, or the null oid if there is none.
-	 */
+	/* EDIT: the post-image blob. */
 	struct object_id oid2;
 	/* BEGIN: optional, NULL if not given */
 	char *model;
@@ -198,8 +193,8 @@ void provenance_picks_release(struct provenance_picks *picks);
 /*
  * Read the journal of the current worktree of `r` into `j`, which
  * must have been initialized with PROVENANCE_JOURNAL_INIT.  A missing
- * journal is empty.  Malformed lines are skipped with a warning.
- * Object ids are not checked for existence: objects named by the
+ * journal is empty.  Malformed lines are skipped with a warning, and
+ * the "reason" entries of earlier versions silently.  Object ids are not checked for existence: objects named by the
  * journal may have been pruned since they were recorded.  Returns 0
  * on success, or -1 after reporting an error if the journal cannot
  * be read.

@@ -443,16 +443,15 @@ static void finish_up_to_date(void)
 }
 
 /*
- * The records of the merge commit about to be made, computed by
+ * The line record of the merge commit about to be made, computed by
  * compute_provenance() and written by finish().
  */
 static struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
-static struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
 static struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 static int record_provenance;
 
 /*
- * If provenance is enabled, compute the records of the merge commit
+ * If provenance is enabled, compute the line record of the merge commit
  * about to be made with the tree `tree` and the parents `parents`, as
  * "git commit" would for a merge that it concludes.
  */
@@ -466,8 +465,7 @@ static void compute_provenance(const struct commit_list *parents,
 	/* the author that commit_tree() will give the commit */
 	author = xstrdup(git_author_info(IDENT_STRICT));
 	if (provenance_commit_records(the_repository, parents, tree, author,
-				      NULL, NULL, &prov_journal, &prov_lines,
-				      &prov_reasoning))
+				      NULL, NULL, &prov_journal, &prov_lines))
 		die(_("unable to record provenance"));
 	free(author);
 	record_provenance = 1;
@@ -475,7 +473,7 @@ static void compute_provenance(const struct commit_list *parents,
 
 /*
  * Move HEAD from `head` to the merge commit `new_head`, and the
- * provenance refs with it if its records were computed, in one ref
+ * provenance ref with it if its line record was computed, in one ref
  * transaction; the commit then consumes the journal, as with "git
  * commit".
  */
@@ -498,14 +496,13 @@ static void update_head(const struct object_id *head,
 	    ref_transaction_update(transaction, "HEAD", new_head, head,
 				   NULL, NULL, 0, msg, &err) ||
 	    provenance_queue_records(the_repository, transaction, new_head,
-				     &prov_lines, &prov_reasoning,
-				     getenv("GIT_REFLOG_ACTION"), &err) ||
+				     &prov_lines, getenv("GIT_REFLOG_ACTION"),
+				     &err) ||
 	    ref_transaction_commit(transaction, &err))
 		die("%s", err.buf);
 	ref_transaction_free(transaction);
 	strbuf_release(&err);
 	provenance_record_release(&prov_lines);
-	provenance_reasoning_release(&prov_reasoning);
 
 	provenance_journal_consume(the_repository, &prov_journal, new_head, 0);
 	provenance_journal_release(&prov_journal);

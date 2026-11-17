@@ -64,7 +64,6 @@ static struct {
 	[ADVICE_MERGE_CONFLICT]				= { "mergeConflict" },
 	[ADVICE_NESTED_TAG]				= { "nestedTag" },
 	[ADVICE_OBJECT_NAME_WARNING]			= { "objectNameWarning" },
-	[ADVICE_PROVENANCE_REASON]			= { "provenanceReason" },
 	[ADVICE_PROVENANCE_SESSION]			= { "provenanceSession" },
 	[ADVICE_PUSH_ALREADY_EXISTS]			= { "pushAlreadyExists" },
 	[ADVICE_PUSH_FETCH_FIRST]			= { "pushFetchFirst" },

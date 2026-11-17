@@ -329,14 +329,12 @@ A patch without a block, as made by a Git that does not record
 provenance, marks every line that the commit adds or removes
 `UNKNOWN`, as a pick of a commit without a line record does; so does
 a block that does not parse, which is ignored with a warning.  The
-reasoning record is not carried by mail, so the sessions that the
-line record names are not in the reasoning record of the new commit.
-The block is kept in the state directory until the commit is made, so
+block is kept in the state directory until the commit is made, so
 `git am --continue` after a conflict records it too.
 
 When linkgit:git-rebase[1] replays commits through `git am` (see
-`--apply` there), each commit made carries the records of the commit
-it replays instead, as with linkgit:git-cherry-pick[1].
+`--apply` there), each commit made carries the line record of the
+commit it replays instead, as with linkgit:git-cherry-pick[1].
 
 CONFIGURATION
 -------------

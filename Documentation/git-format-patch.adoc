@@ -763,9 +763,7 @@ The record in the block keeps only the `file` blocks of the paths that
 the patch shows, so that a patch limited with a pathspec does not
 carry the rest.  A patch that shows none of the paths of the record,
 as that of an empty commit, gets no block, and neither do the cover
-letter and the patch of a commit without a line record.  The reasoning
-record of a commit, which says why it was made, is not carried by
-mail.
+letter and the patch of a commit without a line record.
 
 [[BASE_TREE_INFORMATION]]
 BASE TREE INFORMATION

@@ -1778,57 +1778,44 @@ static int records_lines(const struct provenance_record *lines)
 }
 
 /*
- * Warn if the line record `lines` of the commit `oid` has lines of an
- * AI session but `reasoning` has no summary.  The summary is shared by
- * all the sessions of a commit, so each of its AI sessions is named.
+ * Whether an AI agent session is linked to the commit whose line record
+ * is `lines`: it is named with --session, or a line is attributed to
+ * it.
  */
-static void warn_missing_reasoning(const struct object_id *oid,
-				   const struct provenance_record *lines,
-				   const struct provenance_reasoning *reasoning)
+static int links_session(const struct provenance_record *lines)
 {
-	const char *session = NULL;
-
-	if (reasoning->summary.len)
-		return;
-	for (size_t i = 0; i < lines->actors_nr; i++) {
-		if (lines->actors[i].kind != PROVENANCE_ACTOR_AI)
-			continue;
-		session = lines->actors[i].session;
-		warning(_("commit %s has lines written by AI session %s but no reasoning"),
-			repo_find_unique_abbrev(the_repository, oid, DEFAULT_ABBREV),
-			session);
-	}
-	if (session)
-		advise_if_enabled(ADVICE_PROVENANCE_REASON,
-				  _("record why with `git stamp reason --session %s --summary -`,\n"
-				    "then `git commit --amend --no-edit` if the commit is not pushed yet"),
-				  session);
+	if (provenance_session)
+		return 1;
+	for (size_t i = 0; i < lines->actors_nr; i++)
+		if (lines->actors[i].kind == PROVENANCE_ACTOR_AI)
+			return 1;
+	return 0;
 }
 
 /*
- * Compute the records of the commit about to be made, with the parents
- * `parents`, carrying over those of the commits that `rw` names.  Dies
- * if provenance.require is set and no session is linked to a commit
- * that does not pick or revert another and whose record has a range.
+ * Compute the line record of the commit about to be made, with the
+ * parents `parents`, carrying over those of the commits that `rw`
+ * names.  Dies if provenance.require is set and no session is linked to
+ * a commit that does not pick or revert another and whose record has a
+ * range.
  */
 static void compute_provenance(struct commit_list *parents,
 			       const char *author_ident,
 			       const struct provenance_rewrite *rw,
 			       struct provenance_journal *journal,
-			       struct provenance_record *lines,
-			       struct provenance_reasoning *reasoning)
+			       struct provenance_record *lines)
 {
 	int require = 0;
 
 	if (provenance_commit_records(the_repository, parents,
 				      &the_repository->index->cache_tree->oid,
 				      author_ident, provenance_session, rw,
-				      journal, lines, reasoning)) {
+				      journal, lines)) {
 		rollback_index_files();
 		die(_("unable to record provenance"));
 	}
 
-	if (!rw->pick && !reasoning->sessions_nr && records_lines(lines) &&
+	if (!rw->pick && !links_session(lines) && records_lines(lines) &&
 	    !repo_config_get_bool(the_repository, "provenance.require", &require) &&
 	    require) {
 		rollback_index_files();
@@ -1946,7 +1933,6 @@ int cmd_commit(int argc,
 	struct strbuf err = STRBUF_INIT;
 	struct ref_transaction *transaction;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
-	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
 	struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 	int record_provenance;
 	int ret = 0;
@@ -2095,7 +2081,7 @@ int cmd_commit(int argc,
 
 		determine_rewrite(current_head, &rw);
 		compute_provenance(parents, author_ident.buf, &rw,
-				   &prov_journal, &prov_lines, &prov_reasoning);
+				   &prov_journal, &prov_lines);
 		provenance_picks_release(&rw.picks);
 	}
 
@@ -2122,8 +2108,7 @@ int cmd_commit(int argc,
 					  reflog_msg, &sb, &err) ||
 	    (record_provenance &&
 	     provenance_queue_records(the_repository, transaction, &oid,
-				      &prov_lines, &prov_reasoning,
-				      reflog_msg, &err)) ||
+				      &prov_lines, reflog_msg, &err)) ||
 	    ref_transaction_commit(transaction, &err)) {
 		rollback_index_files();
 		die("%s", err.buf);
@@ -2170,20 +2155,17 @@ int cmd_commit(int argc,
 				     &oid, flags);
 	}
 
-	if (!quiet && record_provenance && !prov_reasoning.sessions_nr &&
+	if (!quiet && record_provenance && !links_session(&prov_lines) &&
 	    records_lines(&prov_lines))
 		advise_if_enabled(ADVICE_PROVENANCE_SESSION,
 				  _("no session is linked to this commit; if the change came from an\n"
 				    "LLM session, provide its details with --session"));
-	if (record_provenance)
-		warn_missing_reasoning(&oid, &prov_lines, &prov_reasoning);
 
 	apply_autostash_ref(the_repository, "MERGE_AUTOSTASH",
 			    NULL, NULL, NULL, NULL);
 
 cleanup:
 	provenance_record_release(&prov_lines);
-	provenance_reasoning_release(&prov_reasoning);
 	provenance_journal_release(&prov_journal);
 	free_commit_extra_headers(extra);
 	commit_list_free(parents);

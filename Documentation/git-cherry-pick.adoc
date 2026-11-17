@@ -262,14 +262,13 @@ PROVENANCE
 
 If provenance is enabled (see `provenance.enabled` in
 linkgit:git-config[1]), each commit that `git cherry-pick` makes
-carries the provenance records of the commit it picks (see
+carries the line record of the commit it picks (see
 linkgit:git-provenance[1]).  The lines it takes from that commit keep
 the marks they have there, and so do the lines it removes.  Lines
 that the picked commit does not have, such as those of a conflict
 resolution, are the human's, and a line of a resolution that replaces
 an AI line becomes `MIXED`.  Stamps made with linkgit:git-stamp[1]
-while resolving conflicts are used as by linkgit:git-commit[1].  The
-reasoning record of the picked commit is copied.
+while resolving conflicts are used as by linkgit:git-commit[1].
 
 If the picked commit has no line record, as when it was made with a
 Git that does not record them, the lines taken from it and the lines
@@ -277,10 +276,10 @@ it removes are `UNKNOWN`, and a line of a resolution that replaces
 such a line stays `UNKNOWN`.
 
 With `--no-commit`, the picked commits are noted in the git directory,
-and the next commit carries their records as if each had been picked
-in turn (see linkgit:git-commit[1]).  If a picked change has been
-discarded by then, as with `git reset --hard`, that commit's reasoning
-is not attached to the new commit.
+and the next commit carries their line records as if each had been
+picked in turn (see linkgit:git-commit[1]).  A picked change that has
+been discarded by then, as with `git reset --hard`, lends nothing to
+the new commit.
 
 SEE ALSO
 --------

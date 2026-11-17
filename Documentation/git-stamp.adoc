@@ -12,7 +12,6 @@ SYNOPSIS
 git stamp begin --session <id> [--model <model>] [--tool <tool>] [--] [<pathspec>...]
 git stamp end --session <id> [--] [<pathspec>...]
 git stamp edit --session <id> --path <path> --pre <file> [--post <file>]
-git stamp reason --session <id> --summary <file> [--transcript <file>]
 git stamp claim --session <id> (--patch <file> | [--] <path>...)
 git stamp list [--session <id>]
 
@@ -87,13 +86,6 @@ COMMANDS
 	`git add` would store _<path>_, applying its attributes and
 	filters.
 
-`reason --session <id> --summary <file> [--transcript <file>]`::
-	Record the summary of the work of the session, and optionally its
-	transcript.  If _<file>_ is `-` for `--summary`, the summary is
-	read from the standard input.  `git commit` warns about a
-	commit with lines of an AI session and no summary (see
-	linkgit:git-commit[1]).
-
 `claim --session <id> (--patch <file> | [--] <path>...)`::
 	Declare that the session wrote the changes to the given paths, or
 	the changes in the given patch, for agents that could not stamp
@@ -132,11 +124,6 @@ OPTIONS
 `--pre <file>`::
 `--post <file>`::
 	Files holding the content of `--path` before and after the edit.
-
-`--summary <file>`::
-`--transcript <file>`::
-	Files holding the summary and the transcript that `reason`
-	records.
 
 `--patch <file>`::
 	A file holding the patch that `claim` records.

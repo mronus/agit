@@ -84,7 +84,6 @@ test_expect_success 'a change carried to another branch is found by content' '
 	git stamp begin --session s2 --model m2 &&
 	test_write_lines a b c d-ai e-ai >shared &&
 	git stamp end --session s2 &&
-	echo "The summary." | git stamp reason --session s2 --summary - &&
 	git checkout main &&
 	echo six >>app &&
 	git commit -a -m carried &&
@@ -95,8 +94,6 @@ test_expect_success 'a change carried to another branch is found by content' '
 	check_ranges HEAD &&
 	git provenance show HEAD >show.out &&
 	test_grep "^actor s2 ai model=m2 tool=unknown session=s2 source=observed$" show.out &&
-	git provenance show --reasoning HEAD >show.out &&
-	test_grep "^The summary.$" show.out &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/journal
 '

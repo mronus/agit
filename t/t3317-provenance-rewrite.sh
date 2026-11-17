@@ -39,47 +39,27 @@ check_lines () {
 	test_cmp expect actual
 }
 
-# Compare the reasoning record of <rev> with the file "expect".
-check_reasoning () {
-	git provenance show --reasoning "$1" >actual &&
-	test_cmp expect actual
-}
-
-# Check that <new> has the records of <old>, except for the commit
-# they name.
+# Check that <new> has the line record of <old>, except for the commit
+# it names.
 #
 # Usage: same_records <old> <new>
 same_records () {
 	new=$(git rev-parse "$2") &&
 	git provenance show "$1" >old.out &&
 	sed -e "s/^commit .*/commit $new/" old.out >expect &&
-	check_lines "$2" &&
-	if git provenance show --reasoning "$1" >old.out
-	then
-		sed -e "s/^commit .*/commit $new/" old.out >expect &&
-		check_reasoning "$2"
-	else
-		test_must_fail git provenance show --reasoning "$2"
-	fi
+	check_lines "$2"
 }
 
-# Print the session line of <session> in the reasoning record of <rev>.
+# Attach <file> as the line record of <commit>, as t3315 does: "git
+# notes" only writes below refs/notes/, so write the note through a
+# scratch notes ref.
 #
-# Usage: session_line <rev> <session>
-session_line () {
-	git provenance show --reasoning "$1" >session.out &&
-	grep "^session $2 " session.out
-}
-
-# Attach a record to a commit, as t3315 does: "git notes" only writes
-# below refs/notes/, so write the note through a scratch notes ref.
-#
-# Usage: add_record (lines|reasoning) <commit> <file>
+# Usage: add_record <commit> <file>
 add_record () {
-	git update-ref "refs/notes/provenance-$1" "refs/provenance/$1" &&
-	git notes --ref="provenance-$1" add -f --no-stripspace -F "$3" "$2" &&
-	git update-ref "refs/provenance/$1" "refs/notes/provenance-$1" &&
-	git update-ref -d "refs/notes/provenance-$1"
+	git update-ref refs/notes/scratch refs/provenance/lines &&
+	git notes --ref=scratch add -f --no-stripspace -F "$2" "$1" &&
+	git update-ref refs/provenance/lines refs/notes/scratch &&
+	git update-ref -d refs/notes/scratch
 }
 
 test_expect_success 'setup' '
@@ -101,7 +81,6 @@ test_expect_success 'setup' '
 	git stamp begin --session s1 --model m1 --tool t1 &&
 	test_write_lines 1 2 three 4 5 6 7 8 9 10 11 >file &&
 	git stamp end --session s1 &&
-	echo "First summary." | git stamp reason --session s1 --summary - &&
 	test_tick &&
 	git commit -a -m ai --session s1 &&
 	git tag ai &&
@@ -129,10 +108,6 @@ test_expect_success '--amend keeps the marks of the lines it leaves alone' '
 	git stamp begin --session s2 &&
 	test_write_lines 1 2 THREE 4 6 7 8 9 10 11 12 13 >file &&
 	git stamp end --session s2 &&
-	echo "Second summary." | git stamp reason --session s2 --summary - &&
-	git stamp list --session s2 >stamps.out &&
-	started=$(sed -n -e "s/^begin \([0-9]*\) .*/\1/p" stamps.out) &&
-	ended=$(sed -n -e "s/^end \([0-9]*\) .*/\1/p" stamps.out) &&
 	git commit -a --amend --no-edit &&
 	{
 		header HEAD &&
@@ -148,17 +123,6 @@ test_expect_success '--amend keeps the marks of the lines it leaves alone' '
 		echo "- 5 HUMAN human $(anchor base file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	{
-		echo "version 1" &&
-		echo "commit $(git rev-parse HEAD)" &&
-		session_line ai s1 &&
-		echo "session s2 model=unknown tool=unknown started=$started ended=$ended" &&
-		echo &&
-		echo "First summary." &&
-		echo &&
-		echo "Second summary."
-	} >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/journal
 '
@@ -193,9 +157,6 @@ test_expect_success 'cherry-pick carries the records to the new lines' '
 		echo "- 4 AI s1 $(anchor shift file 4)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning ai >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	git tag picked
 '
@@ -242,9 +203,6 @@ test_expect_success 'a resolved conflict is HUMAN, or MIXED where it replaces AI
 		echo "- 4 MIXED s1,human $(anchor tri file 4)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning ai >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	git tag resolved
 '
@@ -281,9 +239,6 @@ test_expect_success 'stamps made while resolving a conflict count' '
 		echo "- 4 MIXED s1,human $(anchor tri file 4)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning HEAD >actual &&
-	test_grep "^session s1 " actual &&
-	test_grep "^session s2 " actual &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/journal
 '
@@ -301,7 +256,6 @@ test_expect_success 'revert restores the marks of the commits that wrote the lin
 		echo "- 11 AI s1 $(anchor ai file 11)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 	git tag reverted
 '
@@ -332,7 +286,6 @@ test_expect_success 'a revert concluded with commit carries the marks' '
 		echo "- 11 AI s1 $(anchor HEAD^ file 11)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -348,7 +301,6 @@ test_expect_success 'revert restores a line that a session wrote in an older com
 		echo "+ 3 AI s1 $(anchor HEAD file 3)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -475,7 +427,6 @@ test_expect_success 'setup commits to squash' '
 	git stamp begin --session s2 &&
 	test_write_lines 1 2 THREE 4 five 6 7 8 9 10 11 >file &&
 	git stamp end --session s2 &&
-	echo "Second summary." | git stamp reason --session s2 --summary - &&
 	git stamp begin --session s1 &&
 	test_write_lines 1 2 THREE 4 five 6 7 8 9 10 11 12 >file &&
 	git stamp end --session s1 &&
@@ -504,17 +455,6 @@ test_expect_success 'squash unites the records' '
 		echo "- 5 AI s2 $(anchor base file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	{
-		echo "version 1" &&
-		echo "commit $(git rev-parse HEAD)" &&
-		session_line ai s1 &&
-		session_line second s2 &&
-		echo &&
-		echo "First summary." &&
-		echo &&
-		echo "Second summary."
-	} >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	git tag squashed
 '
@@ -559,9 +499,6 @@ test_expect_success 'a fixup with conflicts carries the records of both commits'
 		echo "- 5 AI s2 $(anchor base file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning HEAD >actual &&
-	test_grep "^session s1 " actual &&
-	test_grep "^session s2 " actual &&
 	git provenance verify HEAD &&
 	git tag fixup-conflicted
 '
@@ -616,9 +553,6 @@ test_expect_success 'commit at a conflicting fixup takes it as a pick' '
 		echo "- 5 AI s2 $(anchor HEAD^ file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning second >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -657,17 +591,6 @@ test_expect_success 'several cherry-pick -n are carried by one commit' '
 		echo "- 6 AI s2 $(anchor shift file 6)"
 	} >expect &&
 	check_lines HEAD &&
-	{
-		echo "version 1" &&
-		echo "commit $(git rev-parse HEAD)" &&
-		session_line ai s1 &&
-		session_line second s2 &&
-		echo &&
-		echo "First summary." &&
-		echo &&
-		echo "Second summary."
-	} >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -693,10 +616,6 @@ test_expect_success 'a conflicting cherry-pick -n resolved by hand and by a sess
 		echo "- 4 MIXED s1,human $(anchor tri file 4)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning HEAD >actual &&
-	test_grep "^session s1 " actual &&
-	test_grep "^session s2 " actual &&
-	test_grep "^First summary.$" actual &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
@@ -715,7 +634,6 @@ test_expect_success 'a cherry-pick -n that was discarded lends nothing' '
 		echo "+ 1 HUMAN human $(anchor HEAD other 1)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
 
@@ -734,9 +652,6 @@ test_expect_success 'commit --amend after cherry-pick -n unites the records' '
 		echo "- 3 AI s1 $(anchor base file 3)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning ai >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -782,7 +697,6 @@ test_expect_success 'setup commits that drop the lines of a session' '
 	git stamp begin --session s2 &&
 	echo 12 >>file &&
 	git stamp end --session s2 &&
-	echo "Twelfth summary." | git stamp reason --session s2 --summary - &&
 	git commit -a -m twelve --session s2 &&
 	git tag twelve
 '
@@ -804,7 +718,6 @@ test_expect_success 'several revert -n are carried by one commit' '
 		echo "+ 11 AI s1 $(anchor HEAD file 11)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
@@ -828,9 +741,6 @@ test_expect_success 'cherry-pick -n and revert -n are carried by one commit' '
 		echo "+ 12 AI s2 $(anchor HEAD file 12)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning twelve >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
@@ -855,7 +765,6 @@ test_expect_success 'a conflicting revert -n resolved by hand' '
 		echo "- 11 AI s1 $(anchor HEAD^ file 11)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
@@ -874,7 +783,6 @@ test_expect_success 'a revert -n that was discarded lends nothing' '
 		echo "+ 1 HUMAN human $(anchor HEAD other 1)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	test_path_is_missing .git/provenance/picks
 '
 
@@ -912,7 +820,6 @@ test_expect_success 'rewrites of commits without records mark their lines UNKNOW
 		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 	git show --provenance HEAD >actual &&
 	test_grep "^?+11$" actual &&
@@ -925,7 +832,6 @@ test_expect_success 'rewrites of commits without records mark their lines UNKNOW
 		echo "- 12 UNKNOWN - $(anchor HEAD^ file 12)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 
 	test_tick &&
@@ -958,9 +864,6 @@ test_expect_success 'squash marks the lines of a commit without a record UNKNOWN
 		echo "- 5 UNKNOWN - $(anchor base file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning ai >old.out &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -986,7 +889,6 @@ test_expect_success 'an UNKNOWN line edited in a conflict resolution stays UNKNO
 		echo "- 5 UNKNOWN - $(anchor HEAD^ file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD &&
 	git tag unknown-resolved
 '
@@ -999,7 +901,6 @@ test_expect_success 'an UNKNOWN line rewritten by a session stays UNKNOWN' '
 	git stamp begin --session s2 &&
 	test_write_lines 1 2 3 4 five-ish 6 7 8 9 10 >file &&
 	git stamp end --session s2 &&
-	echo "Second summary." | git stamp reason --session s2 --summary - &&
 	git commit -a --no-edit &&
 	same_records unknown-resolved HEAD &&
 	git provenance verify HEAD &&
@@ -1019,7 +920,7 @@ test_expect_success 'UNKNOWN ranges of a record are carried as UNKNOWN' '
 		echo "+ 11 AI s1 $(anchor HEAD file 11)" &&
 		echo "+ 12 UNKNOWN - $(anchor HEAD file 12)"
 	} >adopted.out &&
-	add_record lines HEAD adopted.out &&
+	add_record HEAD adopted.out &&
 	git provenance verify HEAD &&
 	git checkout -b adopted-pick shift &&
 	git cherry-pick adopted &&
@@ -1039,7 +940,7 @@ test_expect_success 'a record that does not parse is ignored with a warning' '
 	echo 11 >>file &&
 	git -c provenance.enabled=false commit -a -m bad &&
 	echo "version 2" >bad &&
-	add_record lines HEAD bad &&
+	add_record HEAD bad &&
 	git checkout -b bad-pick shift &&
 	git cherry-pick bad-base 2>err &&
 	test_grep "ignoring the line record of $(git rev-parse bad-base)" err &&

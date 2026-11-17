@@ -10,18 +10,19 @@ export GIT_TEST_PROVENANCE
 
 . ./test-lib.sh
 
-# Attach a record to a commit, as t3312 does: "git notes" only writes
-# below refs/notes/, so write the note through a scratch notes ref.
+# Attach <file> as the line record of <commit>, as t3312 does: "git
+# notes" only writes below refs/notes/, so write the note through a
+# scratch notes ref.
 #
-# Usage: add_record (lines|reasoning) <commit> <file>
+# Usage: add_record <commit> <file>
 add_record () {
-	if git rev-parse -q --verify "refs/provenance/$1" >/dev/null
+	if git rev-parse -q --verify refs/provenance/lines >/dev/null
 	then
-		git update-ref "refs/notes/provenance-$1" "refs/provenance/$1"
+		git update-ref refs/notes/scratch refs/provenance/lines
 	fi &&
-	git notes --ref="provenance-$1" add -f --no-stripspace -F "$3" "$2" &&
-	git update-ref "refs/provenance/$1" "refs/notes/provenance-$1" &&
-	git update-ref -d "refs/notes/provenance-$1"
+	git notes --ref=scratch add -f --no-stripspace -F "$2" "$1" &&
+	git update-ref refs/provenance/lines refs/notes/scratch &&
+	git update-ref -d refs/notes/scratch
 }
 
 # Attach a line record to <rev> that declares the actors "s9" and
@@ -42,7 +43,7 @@ attach_record () {
 			echo "$line" || return 1
 		done
 	} >record.out &&
-	add_record lines "$rev" record.out
+	add_record "$rev" record.out
 }
 
 test_expect_success 'setup' '
@@ -189,7 +190,7 @@ test_expect_success 'stat counts commits without records' '
 test_expect_success 'stat skips a record that does not parse' '
 	bad=$(git commit-tree -p c4 -m bad HEAD^{tree}) &&
 	printf "version 1\nnonsense\n" >bad.out &&
-	add_record lines $bad bad.out &&
+	add_record $bad bad.out &&
 	git provenance stat --porcelain c4..$bad >actual 2>err &&
 	test_grep "ignoring malformed provenance record of $bad" err &&
 	test_grep "^commits 1$" actual &&
@@ -285,7 +286,7 @@ test_expect_success 'a malformed cache is ignored and written anew' '
 '
 
 test_expect_success 'a replaced record is counted from its new blob' '
-	test_when_finished "cp record.c4 record.out && add_record lines c4 record.out" &&
+	test_when_finished "cp record.c4 record.out && add_record c4 record.out" &&
 	rm -f $cache &&
 	git provenance stat >/dev/null &&
 	git provenance show c4 >record.c4 &&

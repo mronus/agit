@@ -9,14 +9,12 @@ struct commit;
 struct repository;
 
 /*
- * Provenance records describe who wrote the lines of a commit (line
- * records) and why the commit was made (reasoning records).  They are
- * stored as notes under the refs below, keyed by the object id of the
- * commit they describe.  See Documentation/technical/
+ * Provenance records (line records) describe who wrote the lines of a
+ * commit.  They are stored as notes under the ref below, keyed by the
+ * object id of the commit they describe.  See Documentation/technical/
  * git-provenance-format.adoc for the format.
  */
 #define PROVENANCE_LINES_REF "refs/provenance/lines"
-#define PROVENANCE_REASONING_REF "refs/provenance/reasoning"
 
 enum provenance_capture {
 	PROVENANCE_CAPTURE_OBSERVED,
@@ -81,27 +79,6 @@ struct provenance_record {
 
 #define PROVENANCE_RECORD_INIT { 0 }
 
-/* An AI session named by a reasoning record. */
-struct provenance_session {
-	char *id;
-	char *model;
-	char *tool;
-	/* Unix time of the session's first and last stamp, or 0 if unknown */
-	timestamp_t started;
-	timestamp_t ended;
-};
-
-/* A reasoning record. */
-struct provenance_reasoning {
-	int version;
-	struct object_id commit;
-	struct provenance_session *sessions;
-	size_t sessions_nr, sessions_alloc;
-	struct strbuf summary;
-};
-
-#define PROVENANCE_REASONING_INIT { .version = 1, .summary = STRBUF_INIT }
-
 /*
  * Parse the line record in `buf` into `rec`, which must have been
  * initialized with PROVENANCE_RECORD_INIT.  Object ids are parsed
@@ -152,23 +129,6 @@ provenance_file_range(const struct provenance_file *file,
 		      char side, unsigned long line);
 
 /*
- * Parse the reasoning record in `buf` into `rec`, which must have been
- * initialized with PROVENANCE_REASONING_INIT, in the same way as
- * provenance_record_parse() parses a line record.  `rec` must be
- * released with provenance_reasoning_release() in either case.
- */
-int provenance_reasoning_parse(const char *buf, size_t len,
-			       const struct git_hash_algo *algop,
-			       struct provenance_reasoning *rec,
-			       struct strbuf *err);
-
-/* Append the serialized form of the reasoning record `rec` to `out`. */
-void provenance_reasoning_format(const struct provenance_reasoning *rec,
-				 struct strbuf *out);
-
-void provenance_reasoning_release(struct provenance_reasoning *rec);
-
-/*
  * Return 1 if commits made in `r` record provenance.  The
  * configuration variable "provenance.enabled" decides; if it is not
  * set, the environment variable GIT_TEST_PROVENANCE does, and
@@ -177,10 +137,9 @@ void provenance_reasoning_release(struct provenance_reasoning *rec);
 int provenance_enabled(struct repository *r);
 
 /*
- * Read the line record (or reasoning record) attached to `commit` in
- * repository `r` and append its raw content to `out`.  Returns 1 if a
- * record was found, and 0 if there is none, including when the ref
- * does not exist.  Returns -1, after reporting an error, if the ref
+ * Read the line record attached to `commit` in repository `r` and
+ * append its raw content to `out`.  Returns 1 if a record was found,
+ * and 0 if there is none, including when the ref does not exist.  Returns -1, after reporting an error, if the ref
  * cannot be read or does not point to a tree, or if the record is not
  * a readable blob.  The lookup follows the notes fan-out directly and
  * does not touch any global notes state.
@@ -188,9 +147,6 @@ int provenance_enabled(struct repository *r);
 int provenance_read_lines(struct repository *r,
 			  const struct object_id *commit,
 			  struct strbuf *out);
-int provenance_read_reasoning(struct repository *r,
-			      const struct object_id *commit,
-			      struct strbuf *out);
 
 /* Parsed line records, read on demand and kept by commit. */
 struct provenance_cache {

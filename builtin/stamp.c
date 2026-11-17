@@ -26,9 +26,6 @@
 #define STAMP_EDIT_USAGE \
 	N_("git stamp edit --session <id> --path <path> --pre <file> [--post <file>]")
 
-#define STAMP_REASON_USAGE \
-	N_("git stamp reason --session <id> --summary <file> [--transcript <file>]")
-
 #define STAMP_CLAIM_USAGE \
 	N_("git stamp claim --session <id> (--patch <file> | [--] <path>...)")
 
@@ -94,21 +91,14 @@ static void hash_file(struct repository *repo, const char *file,
 		die(_("unable to hash '%s'"), file);
 }
 
-/*
- * Store the contents of `file`, or of the standard input if it is "-"
- * and `allow_stdin` is set, as a blob.
- */
+/* Store the contents of `file` as a blob. */
 static void store_file(struct repository *repo, const char *file,
-		       int allow_stdin, struct object_id *oid)
+		       struct object_id *oid)
 {
 	struct strbuf buf = STRBUF_INIT;
 
-	if (allow_stdin && !strcmp(file, "-")) {
-		if (strbuf_read(&buf, 0, 0) < 0)
-			die_errno(_("unable to read from standard input"));
-	} else if (strbuf_read_file(&buf, file, 0) < 0) {
+	if (strbuf_read_file(&buf, file, 0) < 0)
 		die_errno(_("unable to read '%s'"), file);
-	}
 	if (odb_write_object(repo->objects, buf.buf, buf.len, OBJ_BLOB, oid))
 		die(_("unable to write '%s' to the object database"), file);
 	strbuf_release(&buf);
@@ -228,42 +218,6 @@ static int cmd_stamp_edit(int argc, const char **argv, const char *prefix,
 	return ret;
 }
 
-static int cmd_stamp_reason(int argc, const char **argv, const char *prefix,
-			    struct repository *repo)
-{
-	const char * const usagestr[] = {
-		STAMP_REASON_USAGE,
-		NULL,
-	};
-	const char *session = NULL;
-	char *summary = NULL, *transcript = NULL;
-	struct option options[] = {
-		OPT_SESSION(&session),
-		OPT_FILENAME(0, "summary", &summary,
-			     N_("file with the summary, or '-' for the standard input")),
-		OPT_FILENAME(0, "transcript", &transcript,
-			     N_("file with the transcript of the session")),
-		OPT_END(),
-	};
-	struct provenance_journal_entry e = {
-		.type = PROVENANCE_JOURNAL_REASON,
-	};
-	int ret;
-
-	argc = parse_options(argc, argv, prefix, options, usagestr, 0);
-	check_session(session, usagestr, options);
-	if (argc || !summary)
-		usage_with_options(usagestr, options);
-
-	store_file(repo, summary, 1, &e.oid);
-	if (transcript)
-		store_file(repo, transcript, 0, &e.oid2);
-	ret = append(repo, &e, session);
-	free(summary);
-	free(transcript);
-	return ret;
-}
-
 static int cmd_stamp_claim(int argc, const char **argv, const char *prefix,
 			   struct repository *repo)
 {
@@ -292,7 +246,7 @@ static int cmd_stamp_claim(int argc, const char **argv, const char *prefix,
 			.type = PROVENANCE_JOURNAL_CLAIM_PATCH,
 		};
 
-		store_file(repo, patch, 0, &e.oid);
+		store_file(repo, patch, &e.oid);
 		ret = append(repo, &e, session);
 		free(patch);
 		return ret;
@@ -361,7 +315,6 @@ int cmd_stamp(int argc,
 		STAMP_BEGIN_USAGE,
 		STAMP_END_USAGE,
 		STAMP_EDIT_USAGE,
-		STAMP_REASON_USAGE,
 		STAMP_CLAIM_USAGE,
 		STAMP_LIST_USAGE,
 		NULL,
@@ -371,7 +324,6 @@ int cmd_stamp(int argc,
 		OPT_SUBCOMMAND("begin", &fn, cmd_stamp_begin),
 		OPT_SUBCOMMAND("end", &fn, cmd_stamp_end),
 		OPT_SUBCOMMAND("edit", &fn, cmd_stamp_edit),
-		OPT_SUBCOMMAND("reason", &fn, cmd_stamp_reason),
 		OPT_SUBCOMMAND("claim", &fn, cmd_stamp_claim),
 		OPT_SUBCOMMAND("list", &fn, cmd_stamp_list),
 		OPT_END(),

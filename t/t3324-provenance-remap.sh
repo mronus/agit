@@ -35,18 +35,13 @@ import () {
 		old.marks "$1.marks" >"$1.map"
 }
 
-# Print the records of <rev> in <repo> without their "commit" lines;
-# <rev> may have no reasoning record.
+# Print the line record of <rev> in <repo> without its "commit" line.
 #
 # Usage: records <repo> <rev>
 records () {
 	git -C "$1" provenance show "$2" >records.tmp &&
-	if git -C "$1" provenance show --reasoning "$2" >reasoning.tmp 2>/dev/null
-	then
-		cat reasoning.tmp >>records.tmp
-	fi &&
 	grep -v "^commit " records.tmp &&
-	rm -f records.tmp reasoning.tmp
+	rm -f records.tmp
 }
 
 # Print the commits that have a record under <ref> in <repo>.
@@ -58,11 +53,11 @@ keys () {
 	rm -f keys.tmp
 }
 
-# Print the commits that the provenance refs of <repo> point to.
+# Print the commit that the provenance ref of <repo> points to.
 #
 # Usage: provenance_refs <repo>
 provenance_refs () {
-	git -C "$1" rev-parse refs/provenance/lines refs/provenance/reasoning
+	git -C "$1" rev-parse refs/provenance/lines
 }
 
 test_expect_success 'setup' '
@@ -117,20 +112,15 @@ test_expect_success 'records move to the commits whose messages changed' '
 		git -C msg provenance show $new >actual &&
 		test_grep "^commit $new\$" actual || return 1
 	done <old-new.out &&
-	git -C msg provenance show --reasoning main >actual &&
-	test_grep "^commit $(git -C msg rev-parse main)\$" actual &&
 
-	for ref in refs/provenance/lines refs/provenance/reasoning
-	do
-		keys msg $ref >keys.out &&
-		test_grep ! -f old.out keys.out &&
-		git rev-parse $ref >expect &&
-		git -C msg rev-parse $ref^ >actual &&
-		test_cmp expect actual &&
-		git -C msg reflog -1 --format=%gs $ref >actual &&
-		echo remap >expect &&
-		test_cmp expect actual || return 1
-	done &&
+	keys msg refs/provenance/lines >keys.out &&
+	test_grep ! -f old.out keys.out &&
+	git rev-parse refs/provenance/lines >expect &&
+	git -C msg rev-parse refs/provenance/lines^ >actual &&
+	test_cmp expect actual &&
+	git -C msg reflog -1 --format=%gs refs/provenance/lines >actual &&
+	echo remap >expect &&
+	test_cmp expect actual &&
 	git log -p --provenance --format=%T main >expect &&
 	git -C msg log -p --provenance --format=%T main >actual &&
 	test_cmp expect actual
@@ -161,12 +151,6 @@ test_expect_success 'a record whose changes differ is re-attached' '
 	+ 3 UNKNOWN - $(anchor blob main other 3)
 	EOF
 	git -C blob provenance show main >actual &&
-	test_cmp expect actual &&
-	git provenance show --reasoning main >expect.tmp &&
-	grep -v "^commit " expect.tmp >expect &&
-	git -C blob provenance show --reasoning main >actual.tmp &&
-	test_grep "^commit $new\$" actual.tmp &&
-	grep -v "^commit " actual.tmp >actual &&
 	test_cmp expect actual &&
 	keys blob refs/provenance/lines >keys.out &&
 	test_grep ! $old keys.out
@@ -253,19 +237,15 @@ test_expect_success 'prune removes the records of the commits that are gone' '
 
 	git -C gone provenance prune >actual &&
 	test_cmp expect actual &&
-	for ref in refs/provenance/lines refs/provenance/reasoning
-	do
-		keys gone $ref >keys.out &&
-		test_grep ! $old keys.out &&
-		git rev-parse $ref >expect &&
-		git -C gone rev-parse $ref^ >actual &&
-		test_cmp expect actual &&
-		git -C gone reflog -1 --format=%gs $ref >actual &&
-		echo prune >expect &&
-		test_cmp expect actual || return 1
-	done &&
+	git rev-parse refs/provenance/lines >expect &&
+	git -C gone rev-parse refs/provenance/lines^ >actual &&
+	test_cmp expect actual &&
+	git -C gone reflog -1 --format=%gs refs/provenance/lines >actual &&
+	echo prune >expect &&
+	test_cmp expect actual &&
 	git -C gone provenance verify main~1 main~2 &&
 	keys gone refs/provenance/lines >keys.out &&
+	test_grep ! $old keys.out &&
 	test_line_count = 2 keys.out
 '
 

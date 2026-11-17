@@ -6,7 +6,6 @@
 struct commit;
 struct commit_list;
 struct object_id;
-struct provenance_reasoning;
 struct provenance_record;
 struct ref_transaction;
 struct repository;
@@ -56,24 +55,23 @@ struct provenance_rewrite {
 };
 
 /*
- * Compute the records of a commit about to be made in `r`, with the
- * tree `tree`, the parents `parents` (NULL for a root commit) and the
- * author `author` (as in a commit object), from the journal of the
- * worktree, as "git commit" does.  If `rw` is not NULL, the records of
- * the commits it names are carried over.  `session` is as for
- * provenance_attribute(), which also says what is recorded for a merge.
+ * Compute the line record of a commit about to be made in `r`, with
+ * the tree `tree`, the parents `parents` (NULL for a root commit) and
+ * the author `author` (as in a commit object), from the journal of the
+ * worktree, as "git commit" does.  If `rw` is not NULL, the line
+ * records of the commits it names are carried over.  `session` is as
+ * for provenance_attribute(), which also says what is recorded for a
+ * merge.
  *
  * The sources of the commit are `amend`, `pick` and the `picks`, in
  * that order, each named once (see provenance_attribute_rewrite()),
  * with `revert` for `pick` and for each of the `picks` that is a
- * revert.  The `picks` are tentative sources, as they may name commits
- * whose changes were discarded before the commit was made.  A pick
- * that is not a commit is ignored with a warning.  With `mail`, the commit is
- * its own source, with the line record `mail_lines` and no reasoning
- * record.
+ * revert.  A pick that is not a commit is ignored with a warning.
+ * With `mail`, the commit is its own source, with the line record
+ * `mail_lines`.
  *
- * The records are stored in `lines` and `reasoning` as by
- * provenance_attribute().  The lines that the commit takes from a
+ * The line record is stored in `lines` as by provenance_attribute().
+ * The lines that the commit takes from a
  * commit without a line record are UNKNOWN; a line record that cannot
  * be parsed is ignored with a warning.  Returns 0 on success, or -1
  * after reporting an error.
@@ -92,22 +90,18 @@ int provenance_commit_records(struct repository *r,
 			      const char *session,
 			      const struct provenance_rewrite *rw,
 			      struct provenance_journal *journal,
-			      struct provenance_record *lines,
-			      struct provenance_reasoning *reasoning);
+			      struct provenance_record *lines);
 
 /*
- * Write `lines` and `reasoning` as the records of `commit`, filling in
- * their commit ids, and queue the updates of the provenance refs into
- * `transaction`, with the reflog message `reflog_msg`.  The reasoning
- * record is only written if it names a session; if it names none, a
- * reasoning record that `commit` has already is removed.  Returns 0 on
- * success, or -1 with a message in `err`.
+ * Write `lines` as the line record of `commit`, filling in its commit
+ * id, and queue the update of the provenance ref into `transaction`,
+ * with the reflog message `reflog_msg`.  Returns 0 on success, or -1
+ * with a message in `err`.
  */
 int provenance_queue_records(struct repository *r,
 			     struct ref_transaction *transaction,
 			     const struct object_id *commit,
 			     struct provenance_record *lines,
-			     struct provenance_reasoning *reasoning,
 			     const char *reflog_msg,
 			     struct strbuf *err);
 

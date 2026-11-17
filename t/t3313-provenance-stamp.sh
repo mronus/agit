@@ -48,8 +48,6 @@ test_expect_success 'setup' '
 	/err
 	/pre*
 	/post*
-	/summary*
-	/transcript*
 	/patch*
 	/wt/
 	EOF
@@ -71,8 +69,6 @@ test_expect_success 'session is required and must be valid' '
 	test_grep "invalid session id .has space." err &&
 	test_must_fail git stamp claim --session "a/b" file1 2>err &&
 	test_grep "invalid session id .a/b." err &&
-	test_must_fail git stamp reason --session "" --summary file1 2>err &&
-	test_grep "invalid session id" err &&
 	test_path_is_missing .git/provenance/journal
 '
 
@@ -222,38 +218,6 @@ test_expect_success 'edit rejects a missing file' '
 	test_path_is_missing .git/provenance/journal
 '
 
-test_expect_success 'reason stores the summary and the transcript' '
-	test_when_finished "rm -f .git/provenance/journal" &&
-	save_index &&
-	echo "Add a fourth line." >summary &&
-	echo "A transcript." >transcript &&
-	git stamp reason --session s3 --summary summary &&
-	echo "From stdin." | git stamp reason --session s3 --summary - \
-		--transcript transcript &&
-	check_index &&
-	summary=$(git hash-object summary) &&
-	stdin=$(echo "From stdin." | git hash-object --stdin) &&
-	transcript=$(git hash-object transcript) &&
-	cat >expect <<-EOF &&
-	reason s3 $summary
-	reason s3 $stdin $transcript
-	EOF
-	list_entries >actual &&
-	test_cmp expect actual &&
-	git cat-file blob $stdin >actual &&
-	echo "From stdin." >expect &&
-	test_cmp expect actual &&
-	git cat-file blob $transcript >actual &&
-	test_cmp transcript actual
-'
-
-test_expect_success 'reason rejects a missing file' '
-	test_must_fail git stamp reason --session s3 --summary does-not-exist 2>err &&
-	test_grep "does-not-exist" err &&
-	test_must_fail git stamp reason --session s3 2>err &&
-	test_path_is_missing .git/provenance/journal
-'
-
 test_expect_success 'claim records paths and patches' '
 	test_when_finished "rm -f .git/provenance/journal" &&
 	save_index &&
@@ -331,6 +295,24 @@ test_expect_success 'list skips malformed lines' '
 	test_grep ! "ignoring malformed line 6 " err
 '
 
+test_expect_success 'list skips reason entries silently' '
+	test_when_finished "rm -f .git/provenance/journal" &&
+	git stamp claim --session s5 file1 &&
+	head=$(git rev-parse HEAD) &&
+	{
+		echo "reason 1 s5 head=$head $(git hash-object file1)" &&
+		echo "reason 2 s5 $ZERO_OID $ZERO_OID"
+	} >>.git/provenance/journal &&
+	git stamp claim --session s5 file2 &&
+	cat >expect <<-\EOF &&
+	claim s5 path file1
+	claim s5 path file2
+	EOF
+	list_entries >actual 2>err &&
+	test_cmp expect actual &&
+	test_must_be_empty err
+'
+
 test_expect_success 'each stamp records the HEAD it was taken on' '
 	test_when_finished "rm -f .git/provenance/journal" &&
 	head=$(git rev-parse HEAD) &&
@@ -338,13 +320,12 @@ test_expect_success 'each stamp records the HEAD it was taken on' '
 	git stamp end --session s8 &&
 	cp file1 pre &&
 	git stamp edit --session s8 --path file1 --pre pre &&
-	echo summary | git stamp reason --session s8 --summary - &&
 	git stamp claim --session s8 file1 &&
 	git diff HEAD >patch &&
 	git stamp claim --session s8 --patch patch &&
 	git stamp list >list.out &&
 	sed -e "s/^[a-z]* [0-9]* s8 head=$head .*/ok/" list.out >actual &&
-	test_write_lines ok ok ok ok ok ok >expect &&
+	test_write_lines ok ok ok ok ok >expect &&
 	test_cmp expect actual &&
 	test_grep "^begin [0-9]* s8 head=$head [0-9a-f]* model=m$" list.out &&
 	test_grep "^claim [0-9]* s8 head=$head path file1$" list.out

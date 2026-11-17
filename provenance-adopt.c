@@ -167,26 +167,6 @@ static int touches(const struct provenance_record *rec,
 	return 0;
 }
 
-/* Read the reasoning record of `commit` into `rec`; 1 if it has one. */
-static int read_reasoning(struct repository *r, struct commit *commit,
-			  struct provenance_reasoning *rec)
-{
-	const struct object_id *oid = &commit->object.oid;
-	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
-	int ret = provenance_read_reasoning(r, oid, &buf);
-
-	if (ret > 0 &&
-	    provenance_reasoning_parse(buf.buf, buf.len, r->hash_algo,
-				       rec, &err)) {
-		warning(_("ignoring the reasoning record of %s: %s"),
-			oid_to_hex(oid), err.buf);
-		ret = 0;
-	}
-	strbuf_release(&buf);
-	strbuf_release(&err);
-	return ret;
-}
-
 /* Whether a range of `rec` says who wrote its lines. */
 static int has_known_lines(const struct provenance_record *rec)
 {
@@ -220,9 +200,8 @@ static char *author_of(struct repository *r, struct commit *commit)
 	return ret;
 }
 
-static int write_records(struct repository *r, struct commit *commit,
-			 struct provenance_record *lines,
-			 struct provenance_reasoning *reasoning)
+static int write_record(struct repository *r, struct commit *commit,
+			struct provenance_record *lines)
 {
 	struct ref_transaction *transaction;
 	struct strbuf err = STRBUF_INIT;
@@ -231,8 +210,7 @@ static int write_records(struct repository *r, struct commit *commit,
 	transaction = ref_store_transaction_begin(get_main_ref_store(r), 0, &err);
 	if (!transaction ||
 	    provenance_queue_records(r, transaction, &commit->object.oid,
-				     lines, reasoning, "provenance adopt",
-				     &err) ||
+				     lines, "provenance adopt", &err) ||
 	    ref_transaction_commit(transaction, &err))
 		ret = error("%s", err.buf);
 	ref_transaction_free(transaction);
@@ -245,10 +223,8 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 {
 	struct repository *r = pa->r;
 	struct provenance_record lines = PROVENANCE_RECORD_INIT;
-	struct provenance_reasoning reasoning = PROVENANCE_REASONING_INIT;
 	struct provenance_journal journal = PROVENANCE_JOURNAL_INIT;
 	struct provenance_source *sources = NULL;
-	struct provenance_reasoning *reasonings = NULL;
 	struct strset paths = STRSET_INIT;
 	size_t nr = 0;
 	char *human = NULL;
@@ -273,7 +249,6 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 
 	changed_paths(r, commit, &paths);
 	CALLOC_ARRAY(sources, pa->candidates_nr);
-	CALLOC_ARRAY(reasonings, pa->candidates_nr);
 	for (size_t i = 0; i < pa->candidates_nr; i++) {
 		struct commit *c = pa->candidates[i];
 		const struct provenance_record *rec =
@@ -281,13 +256,8 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 
 		if (!rec || !touches(rec, &paths))
 			continue;
-		reasonings[nr] = (struct provenance_reasoning)
-			PROVENANCE_REASONING_INIT;
 		sources[nr].commit = c;
 		sources[nr].lines = rec;
-		sources[nr].tentative = 1;
-		if (read_reasoning(r, c, &reasonings[nr]) > 0)
-			sources[nr].reasoning = &reasonings[nr];
 		nr++;
 	}
 	if (!nr)
@@ -298,8 +268,7 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 	    provenance_attribute_rewrite(r, commit->parents,
 					 get_commit_tree_oid(commit),
 					 sources, nr, PROVENANCE_REWRITE_ADOPT,
-					 &journal, NULL, human,
-					 &lines, &reasoning)) {
+					 &journal, NULL, human, &lines)) {
 		ret = -1;
 		goto out;
 	}
@@ -307,18 +276,14 @@ int provenance_adopt_commit(struct provenance_adopt *pa, struct commit *commit,
 	/* an all-UNKNOWN record would only stand in the way of a later adopt */
 	if (!has_known_lines(&lines))
 		goto out;
-	ret = write_records(r, commit, &lines, &reasoning);
+	ret = write_record(r, commit, &lines);
 	if (!ret)
 		*result = PROVENANCE_ADOPT_ADOPTED;
 
 out:
-	for (size_t i = 0; i < nr; i++)
-		provenance_reasoning_release(&reasonings[i]);
-	free(reasonings);
 	free(sources);
 	strset_clear(&paths);
 	provenance_record_release(&lines);
-	provenance_reasoning_release(&reasoning);
 	free(human);
 	return ret;
 }

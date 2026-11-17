@@ -32,7 +32,6 @@ static const char *type_names[] = {
 	[PROVENANCE_JOURNAL_BEGIN] = "begin",
 	[PROVENANCE_JOURNAL_END] = "end",
 	[PROVENANCE_JOURNAL_EDIT] = "edit",
-	[PROVENANCE_JOURNAL_REASON] = "reason",
 	[PROVENANCE_JOURNAL_CLAIM_PATH] = "claim",
 	[PROVENANCE_JOURNAL_CLAIM_PATCH] = "claim",
 };
@@ -89,13 +88,6 @@ void provenance_journal_entry_format(const struct provenance_journal_entry *e,
 		strbuf_add_oid_hex(out, &e->oid2);
 		strbuf_addch(out, ' ');
 		strbuf_addstr(out, e->path);
-		break;
-	case PROVENANCE_JOURNAL_REASON:
-		strbuf_add_oid_hex(out, &e->oid);
-		if (!is_null_oid(&e->oid2)) {
-			strbuf_addch(out, ' ');
-			strbuf_add_oid_hex(out, &e->oid2);
-		}
 		break;
 	case PROVENANCE_JOURNAL_CLAIM_PATH:
 		strbuf_addstr(out, "path ");
@@ -548,8 +540,6 @@ static int parse_entry(const char *line, const struct git_hash_algo *algop,
 		e->type = PROVENANCE_JOURNAL_END;
 	else if (skip_prefix(p, "edit ", &p))
 		e->type = PROVENANCE_JOURNAL_EDIT;
-	else if (skip_prefix(p, "reason ", &p))
-		e->type = PROVENANCE_JOURNAL_REASON;
 	else if (skip_prefix(p, "claim ", &p))
 		e->type = PROVENANCE_JOURNAL_CLAIM_PATH;
 	else
@@ -605,15 +595,6 @@ static int parse_entry(const char *line, const struct git_hash_algo *algop,
 		e->path = xstrdup(p);
 		p += strlen(p);
 		break;
-	case PROVENANCE_JOURNAL_REASON:
-		if (parse_oid_field(&p, algop, &e->oid))
-			return -1;
-		if (*p == ' ') {
-			p++;
-			if (parse_oid_field(&p, algop, &e->oid2))
-				return -1;
-		}
-		break;
 	case PROVENANCE_JOURNAL_CLAIM_PATH:
 	case PROVENANCE_JOURNAL_CLAIM_PATCH:
 		if (skip_prefix(p, "path ", &p) && is_path(p)) {
@@ -660,6 +641,14 @@ int provenance_journal_read(struct repository *r,
 		if (*next)
 			*next++ = '\0';
 		lineno++;
+
+		/*
+		 * Earlier versions recorded "reason" entries, which
+		 * nothing reads any more: skip them silently, so that
+		 * they are dropped when the journal is consumed.
+		 */
+		if (starts_with(line, "reason "))
+			continue;
 
 		ALLOC_GROW(j->entries, j->nr + 1, j->alloc);
 		e = &j->entries[j->nr];

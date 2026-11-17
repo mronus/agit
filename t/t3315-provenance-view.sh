@@ -33,18 +33,19 @@ add_marks () {
 	' "$1" "$2"
 }
 
-# Attach a record to a commit, as t3312 does: "git notes" only writes
-# below refs/notes/, so write the note through a scratch notes ref.
+# Attach <file> as the line record of <commit>, as t3312 does: "git
+# notes" only writes below refs/notes/, so write the note through a
+# scratch notes ref.
 #
-# Usage: add_record (lines|reasoning) <commit> <file>
+# Usage: add_record <commit> <file>
 add_record () {
-	if git rev-parse -q --verify "refs/provenance/$1" >/dev/null
+	if git rev-parse -q --verify refs/provenance/lines >/dev/null
 	then
-		git update-ref "refs/notes/provenance-$1" "refs/provenance/$1"
+		git update-ref refs/notes/scratch refs/provenance/lines
 	fi &&
-	git notes --ref="provenance-$1" add -f --no-stripspace -F "$3" "$2" &&
-	git update-ref "refs/provenance/$1" "refs/notes/provenance-$1" &&
-	git update-ref -d "refs/notes/provenance-$1"
+	git notes --ref=scratch add -f --no-stripspace -F "$2" "$1" &&
+	git update-ref refs/provenance/lines refs/notes/scratch &&
+	git update-ref -d refs/notes/scratch
 }
 
 # Attach a line record to <rev> that declares the actors "s9" and
@@ -65,7 +66,7 @@ attach_record () {
 			echo "$line" || return 1
 		done
 	} >record.out &&
-	add_record lines "$rev" record.out
+	add_record "$rev" record.out
 }
 
 test_expect_success 'setup' '
@@ -80,7 +81,6 @@ test_expect_success 'setup' '
 	/index.*
 	/before
 	/after
-	/reasoning
 	/err
 	/repo*
 	EOF
@@ -227,7 +227,7 @@ test_expect_success 'a malformed record shows ? with a warning' '
 	git -c provenance.enabled=false commit -a -m malformed &&
 	test_when_finished "git reset --hard second" &&
 	echo garbage >garbage.out &&
-	add_record lines HEAD garbage.out &&
+	add_record HEAD garbage.out &&
 	git show --provenance HEAD >actual 2>err &&
 	patch_body actual >actual.body &&
 	test_grep "^?+7$" actual.body &&
@@ -674,27 +674,6 @@ test_expect_success 'blame --reverse shows ?' '
 	test_grep ! "^[^ ]* [AMH] " actual
 '
 
-test_expect_success 'test-tool round-trips reasoning records' '
-	cat >reasoning.out <<-EOF &&
-	version 1
-	commit $(git rev-parse second)
-	session s1 model=m1 tool=t1 started=10 ended=20
-	session s2 model=m2 tool=t2
-
-	The summary.
-
-	More.
-	EOF
-	test-tool provenance format-reasoning <reasoning.out >actual &&
-	test_cmp reasoning.out actual &&
-	sed -e "s/started=10/started=x/" reasoning.out >bad.out &&
-	test_must_fail test-tool provenance format-reasoning <bad.out 2>err &&
-	test_grep "line 3: malformed session .s1." err &&
-	sed -e "/^commit /d" reasoning.out >bad.out &&
-	test_must_fail test-tool provenance format-reasoning <bad.out 2>err &&
-	test_grep "line 2: expected .commit. line" err
-'
-
 test_expect_success 'setup placeholders' '
 	git stamp begin --session s6 --model mA &&
 	test_write_lines a b c >pfile &&
@@ -707,25 +686,14 @@ test_expect_success 'setup placeholders' '
 	test_write_lines a b c d e f g >pfile &&
 	git stamp end --session s8 &&
 	test_write_lines a b c d e f g h i >pfile &&
-	printf "First line.\n\nSecond paragraph.\n" >summary.out &&
-	git stamp reason --session s6 --summary summary.out &&
 	git add pfile &&
 	git commit -m placeholders &&
 	git tag placeholders
 '
 
-test_expect_success '%(provenance:...) shows the summary, share, models and sessions' '
-	cat >expect <<-\EOF &&
-	78%|mA,mB|s6,s7,s8
-	First line.
-
-	Second paragraph.
-	EOF
-	git log -1 --format="%(provenance:share)|%(provenance:models)|%(provenance:sessions)%n%(provenance:summary)" placeholders >actual &&
-	test_cmp expect actual &&
-	git provenance show --reasoning placeholders >reasoning &&
-	sed -e "1,/^\$/d" reasoning >expect &&
-	git log -1 --format="%(provenance:summary)" placeholders >actual &&
+test_expect_success '%(provenance:...) shows the share, models and sessions' '
+	echo "78%|mA,mB|s6,s7,s8" >expect &&
+	git log -1 --format="%(provenance:share)|%(provenance:models)|%(provenance:sessions)" placeholders >actual &&
 	test_cmp expect actual
 '
 
@@ -752,11 +720,8 @@ test_expect_success '%(provenance:share) rounds to the nearest percent' '
 
 test_expect_success '%(provenance:...) is empty without records' '
 	git -c provenance.enabled=false commit --allow-empty -m none &&
-	git log -1 --format="[%(provenance:share)|%(provenance:models)|%(provenance:sessions)|%(provenance:summary)]" >actual &&
-	echo "[|||]" >expect &&
-	test_cmp expect actual &&
-	git log -1 --format="[%(provenance:summary)]" second >actual &&
-	echo "[]" >expect &&
+	git log -1 --format="[%(provenance:share)|%(provenance:models)|%(provenance:sessions)]" >actual &&
+	echo "[||]" >expect &&
 	test_cmp expect actual
 '
 

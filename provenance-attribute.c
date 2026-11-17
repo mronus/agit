@@ -61,10 +61,6 @@ struct session_info {
 	char *actor_id;
 	const char *model;
 	const char *tool;
-	timestamp_t started;
-	timestamp_t ended;
-	/* summary blob of the most recent "reason" entry, or NULL */
-	const struct object_id *summary;
 	/* paths claimed by "claim" entries, sorted */
 	struct string_list claims;
 	/* path -> the hunks claimed by "claim --patch" (struct hunks) */
@@ -75,8 +71,6 @@ struct session_info {
 	unsigned claim_all : 1;
 	/* the session owns a line of the commit */
 	unsigned attached : 1;
-	/* the session is only known from the line record of a source */
-	unsigned imported : 1;
 	/* the "source" of the actor in the line record of a source, or NULL */
 	const char *source;
 };
@@ -130,8 +124,6 @@ struct seed {
 	 * changes, before it did (path -> struct restored_file).
 	 */
 	struct strmap restored;
-	/* a line of the commit takes its owners from the source */
-	unsigned contributed : 1;
 	/*
 	 * Another parent of a merge: its pre-image is the first parent,
 	 * and the lines that differ belong to the pseudo-actor `other` of
@@ -551,8 +543,6 @@ static void collect_sessions(struct attribution *a, const char *session)
 
 		switch (e->type) {
 		case PROVENANCE_JOURNAL_BEGIN:
-			if (!s->started)
-				s->started = e->time;
 			if (!s->model && e->model)
 				s->model = e->model;
 			if (!s->tool && e->tool)
@@ -561,14 +551,10 @@ static void collect_sessions(struct attribution *a, const char *session)
 		case PROVENANCE_JOURNAL_END:
 			if (e->crossing)
 				break;
-			s->ended = e->time;
 			s->stamped = 1;
 			break;
 		case PROVENANCE_JOURNAL_EDIT:
 			s->stamped = 1;
-			break;
-		case PROVENANCE_JOURNAL_REASON:
-			s->summary = &e->oid;
 			break;
 		case PROVENANCE_JOURNAL_CLAIM_PATH:
 			/* a path claimed on another commit says nothing */
@@ -799,12 +785,6 @@ struct step {
 	 */
 	const int *seed;
 	const int *pre_seed;
-	/*
-	 * If not NULL, per line of `seed` and `pre_seed`: the index of the
-	 * source the owners come from, or -1.
-	 */
-	const int *from;
-	const int *pre_from;
 	const struct line_owner *old;
 	struct line_owner *new;
 	int *deleted;
@@ -829,29 +809,14 @@ static int is_unknown(struct attribution *a, int set)
 	return s->actors[last] == a->unknown;
 }
 
-/*
- * Note that a line of the commit takes the set `set` from the source
- * `from[i]`, if there is one; the lines it gives an unknown origin do
- * not count.
- */
-static void contribute(struct attribution *a, const int *from, size_t i,
-		       int set)
-{
-	if (from && from[i] >= 0 && !is_unknown(a, set))
-		a->seeds[from[i]].contributed = 1;
-}
-
 static void step_delete(struct step *st, const struct line_owner *o)
 {
 	if (o->set != BASELINE)
 		return;
-	if (st->pre_seed) {
+	if (st->pre_seed)
 		st->deleted[o->base - 1] = st->pre_seed[o->base - 1];
-		contribute(st->a, st->pre_from, o->base - 1,
-			   st->pre_seed[o->base - 1]);
-	} else {
+	else
 		st->deleted[o->base - 1] = singleton(st->a, st->actor);
-	}
 }
 
 /* The owner of the line `b` of the new version, which the step changes. */
@@ -859,7 +824,6 @@ static int step_owner(struct step *st, long b)
 {
 	if (!st->seed)
 		return singleton(st->a, st->actor);
-	contribute(st->a, st->from, b, st->seed[b]);
 	return st->seed[b];
 }
 
@@ -890,8 +854,6 @@ static int step_hunk(long start_a, long count_a,
 			n->set = step_owner(st, start_b + i);
 		} else if (st->seed) {
 			n->set = set_union(st->a, o->set, st->seed[start_b + i]);
-			contribute(st->a, st->from, start_b + i,
-				   st->seed[start_b + i]);
 		} else {
 			n->set = set_add(st->a, o->set, st->actor);
 		}
@@ -924,22 +886,18 @@ static int diff_hunks(mmfile_t *file_a, mmfile_t *file_b,
  * `content`, made by `actor`: lines the step leaves alone keep their
  * owners, lines it changes gain `actor`, and lines it adds belong to
  * `actor` alone.  With `seed` and `pre_seed` (see struct step), the
- * owners they give take the place of `actor`, and the sources named by
- * `from` and `pre_from` are marked as contributing.  Takes ownership
- * of `content`.
+ * owners they give take the place of `actor`.  Takes ownership of
+ * `content`.
  */
 static int step_seeded(struct attribution *a, struct file_state *fs,
 		       mmfile_t content, const struct object_id *next,
-		       int actor, const int *seed, const int *pre_seed,
-		       const int *from, const int *pre_from)
+		       int actor, const int *seed, const int *pre_seed)
 {
 	struct step st = {
 		.a = a,
 		.actor = actor,
 		.seed = seed,
 		.pre_seed = pre_seed,
-		.from = from,
-		.pre_from = pre_from,
 		.old = fs->owners,
 		.deleted = fs->deleted,
 	};
@@ -971,7 +929,7 @@ static int step_seeded(struct attribution *a, struct file_state *fs,
 static int step_to(struct attribution *a, struct file_state *fs,
 		   mmfile_t content, const struct object_id *next, int actor)
 {
-	return step_seeded(a, fs, content, next, actor, NULL, NULL, NULL, NULL);
+	return step_seeded(a, fs, content, next, actor, NULL, NULL);
 }
 
 /* As step_to(), with the content of the blob `next`. */
@@ -1237,9 +1195,7 @@ static int has_seed(struct attribution *a, const char *path)
 struct found_owners {
 	/* per line: its set, or -1 if no source knows the line */
 	int *sets;
-	/* per line: the index of the source the set comes from, or -1 */
-	int *from;
-	/* per line: that source has the line as it is */
+	/* per line: the source the set comes from has the line as it is */
 	char *kept;
 	size_t nr;
 };
@@ -1247,29 +1203,27 @@ struct found_owners {
 static void found_owners_init(struct found_owners *fo, size_t nr)
 {
 	ALLOC_ARRAY(fo->sets, nr);
-	ALLOC_ARRAY(fo->from, nr);
 	CALLOC_ARRAY(fo->kept, nr);
 	for (size_t i = 0; i < nr; i++)
-		fo->sets[i] = fo->from[i] = -1;
+		fo->sets[i] = -1;
 	fo->nr = nr;
 }
 
 static void found_owners_release(struct found_owners *fo)
 {
 	free(fo->sets);
-	free(fo->from);
 	free(fo->kept);
 }
 
 /*
- * Merge into `fo` the owners that the source `src` gives to the lines
- * of `to`, as transplant() computes them from its version `from`,
- * owned as `sets` says.  A line keeps the set of an earlier source,
- * unless only the new one has the line as it is.  Returns -1 if the
- * versions cannot be compared.
+ * Merge into `fo` the owners that a source gives to the lines of `to`,
+ * as transplant() computes them from its version `from`, owned as
+ * `sets` says.  A line keeps the set of an earlier source, unless only
+ * the new one has the line as it is.  Returns -1 if the versions
+ * cannot be compared.
  */
 static int merge_owners(struct attribution *a, struct found_owners *fo,
-			int src, mmfile_t *from, const int *sets, mmfile_t *to)
+			mmfile_t *from, const int *sets, mmfile_t *to)
 {
 	char *kept;
 	int *to_sets = transplant(a, from, sets, to, &kept);
@@ -1278,10 +1232,9 @@ static int merge_owners(struct attribution *a, struct found_owners *fo,
 		return -1;
 	for (size_t i = 0; i < fo->nr; i++) {
 		if (to_sets[i] < 0 ||
-		    (fo->from[i] >= 0 && (fo->kept[i] || !kept[i])))
+		    (fo->sets[i] >= 0 && (fo->kept[i] || !kept[i])))
 			continue;
 		fo->sets[i] = to_sets[i];
-		fo->from[i] = src;
 		fo->kept[i] = kept[i];
 	}
 	free(to_sets);
@@ -1359,8 +1312,8 @@ static int step_found(struct attribution *a, const char *path,
 					      &old_sets, &new_sets);
 			}
 			if (!new_sets || !old_sets ||
-			    merge_owners(a, &owners, i, &new, new_sets, &found) ||
-			    merge_owners(a, &deleters, i, &old, old_sets, base))
+			    merge_owners(a, &owners, &new, new_sets, &found) ||
+			    merge_owners(a, &deleters, &old, old_sets, base))
 				ret = error(_("unable to diff '%s' with its version in %s"),
 					    path, oid_to_hex(&seed->commit->object.oid));
 		}
@@ -1380,8 +1333,7 @@ static int step_found(struct attribution *a, const char *path,
 			if (deleters.sets[i] < 0)
 				deleters.sets[i] = fallback;
 		ret = step_seeded(a, fs, found, found_oid, a->fallback,
-				  owners.sets, deleters.sets,
-				  owners.from, deleters.from);
+				  owners.sets, deleters.sets);
 	}
 	found_owners_release(&owners);
 	found_owners_release(&deleters);
@@ -2079,75 +2031,9 @@ static void add_actors(struct attribution *a, const char *human,
 	}
 }
 
-static void add_session(struct attribution *a, int i,
-			struct provenance_reasoning *reasoning)
-{
-	const struct session_info *s = &a->sessions[i];
-	struct provenance_session *out;
-	size_t j;
-
-	/* a session of a source may have stamps in the journal, too */
-	for (j = 0; j < reasoning->sessions_nr; j++)
-		if (!strcmp(reasoning->sessions[j].id, s->id))
-			break;
-	if (j == reasoning->sessions_nr) {
-		ALLOC_GROW(reasoning->sessions, reasoning->sessions_nr + 1,
-			   reasoning->sessions_alloc);
-		out = &reasoning->sessions[reasoning->sessions_nr++];
-		out->id = xstrdup(s->id);
-		out->model = xstrdup(s->model ? s->model : "unknown");
-		out->tool = xstrdup(s->tool ? s->tool : "unknown");
-		out->started = s->started;
-		out->ended = s->ended;
-	}
-
-	if (s->summary) {
-		mmfile_t summary;
-
-		if (!has_type(a, s->summary, OBJ_BLOB) ||
-		    read_blob(a, s->summary, &summary)) {
-			warning(_("cannot read the summary of session '%s'"),
-				s->id);
-			return;
-		}
-		if (summary.size) {
-			if (reasoning->summary.len)
-				strbuf_addch(&reasoning->summary, '\n');
-			strbuf_add(&reasoning->summary, summary.ptr, summary.size);
-			strbuf_complete_line(&reasoning->summary);
-		}
-		free(summary.ptr);
-	}
-}
-
 /*
- * The sessions attached to the commit are those that own a line of
- * it, in order of first use, and the session named with "--session".
- */
-static void add_sessions(struct attribution *a, const char *session,
-			 struct provenance_reasoning *reasoning)
-{
-	for (int rank = 1; rank <= a->ranked; rank++) {
-		int i = 0;
-
-		while (a->rank[i] != rank)
-			i++;
-		if (i != a->human && a->sessions[i].attached &&
-		    !a->sessions[i].imported)
-			add_session(a, i, reasoning);
-	}
-	if (session) {
-		int i = session_index(a, session);
-
-		if (!a->sessions[i].attached)
-			add_session(a, i, reasoning);
-	}
-}
-
-/*
- * Mark the foreign "reason" and "claim --patch" entries of the
- * sessions attached to the commit as used, as their summary or their
- * hunks are.
+ * Mark the foreign "claim --patch" entries of the sessions attached to
+ * the commit as used, as their hunks are.
  */
 static void mark_used(struct attribution *a)
 {
@@ -2156,9 +2042,7 @@ static void mark_used(struct attribution *a)
 	for (size_t i = 0; i < j->nr; i++) {
 		struct provenance_journal_entry *e = &j->entries[i];
 
-		if (e->foreign &&
-		    (e->type == PROVENANCE_JOURNAL_REASON ||
-		     e->type == PROVENANCE_JOURNAL_CLAIM_PATCH) &&
+		if (e->foreign && e->type == PROVENANCE_JOURNAL_CLAIM_PATCH &&
 		    a->sessions[session_index(a, e->session)].attached)
 			e->used = 1;
 	}
@@ -2202,7 +2086,6 @@ static int *import_actors(struct attribution *a,
 			s->actor_id = xstrdup(actor->id);
 			string_list_init_dup(&s->claims);
 			strmap_init(&s->hunks);
-			s->imported = 1;
 		}
 		s = &a->sessions[j];
 		if (!s->source) {
@@ -2509,48 +2392,16 @@ void provenance_attribution_free(struct provenance_attribution *pa)
 	free(pa);
 }
 
-/* Add the sessions and the summary of `from` that `to` does not have. */
-static void copy_reasoning(const struct provenance_reasoning *from,
-			   struct provenance_reasoning *to)
-{
-	for (size_t i = 0; i < from->sessions_nr; i++) {
-		const struct provenance_session *s = &from->sessions[i];
-		struct provenance_session *out;
-		size_t j;
-
-		for (j = 0; j < to->sessions_nr; j++)
-			if (!strcmp(to->sessions[j].id, s->id))
-				break;
-		if (j < to->sessions_nr)
-			continue;
-		ALLOC_GROW(to->sessions, to->sessions_nr + 1, to->sessions_alloc);
-		out = &to->sessions[to->sessions_nr++];
-		out->id = xstrdup(s->id);
-		out->model = xstrdup_or_null(s->model);
-		out->tool = xstrdup_or_null(s->tool);
-		out->started = s->started;
-		out->ended = s->ended;
-	}
-	if (from->summary.len) {
-		if (to->summary.len)
-			strbuf_addch(&to->summary, '\n');
-		strbuf_addbuf(&to->summary, &from->summary);
-		strbuf_complete_line(&to->summary);
-	}
-}
-
 int provenance_attribute(struct repository *r,
 			 const struct commit_list *parents,
 			 const struct object_id *tree,
 			 struct provenance_journal *journal,
 			 const char *session,
 			 const char *human,
-			 struct provenance_record *lines,
-			 struct provenance_reasoning *reasoning)
+			 struct provenance_record *lines)
 {
 	return provenance_attribute_rewrite(r, parents, tree, NULL, 0, 0,
-					    journal, session, human,
-					    lines, reasoning);
+					    journal, session, human, lines);
 }
 
 int provenance_attribute_rewrite(struct repository *r,
@@ -2561,8 +2412,7 @@ int provenance_attribute_rewrite(struct repository *r,
 				 struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,
-				 struct provenance_record *lines,
-				 struct provenance_reasoning *reasoning)
+				 struct provenance_record *lines)
 {
 	struct attribution a;
 	const struct object_id *base = r->hash_algo->empty_tree;
@@ -2606,15 +2456,6 @@ int provenance_attribute_rewrite(struct repository *r,
 
 	if (!ret) {
 		add_actors(&a, human, lines);
-		/*
-		 * A tentative source gives its reasoning only if the
-		 * commit was found to be made from it.
-		 */
-		for (size_t i = 0; i < nr; i++)
-			if (sources[i].reasoning && !sources[i].revert &&
-			    (!sources[i].tentative || a.seeds[i].contributed))
-				copy_reasoning(sources[i].reasoning, reasoning);
-		add_sessions(&a, session, reasoning);
 		mark_used(&a);
 	}
 	attribution_release(&a);

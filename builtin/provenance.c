@@ -25,7 +25,7 @@
 #include "write-or-die.h"
 
 #define PROVENANCE_SHOW_USAGE \
-	N_("git provenance show [--reasoning] <commit>")
+	N_("git provenance show <commit>")
 
 #define PROVENANCE_VERIFY_USAGE \
 	N_("git provenance verify [<commit>...]")
@@ -63,10 +63,7 @@ static int cmd_provenance_show(int argc, const char **argv, const char *prefix,
 		PROVENANCE_SHOW_USAGE,
 		NULL,
 	};
-	int reasoning = 0;
 	struct option options[] = {
-		OPT_BOOL(0, "reasoning", &reasoning,
-			 N_("show the reasoning record instead of the line record")),
 		OPT_END(),
 	};
 	struct strbuf buf = STRBUF_INIT;
@@ -78,10 +75,7 @@ static int cmd_provenance_show(int argc, const char **argv, const char *prefix,
 		usage_with_options(show_usage, options);
 
 	commit = lookup_commit_arg(repo, argv[0]);
-	if (reasoning)
-		ret = provenance_read_reasoning(repo, &commit->object.oid, &buf);
-	else
-		ret = provenance_read_lines(repo, &commit->object.oid, &buf);
+	ret = provenance_read_lines(repo, &commit->object.oid, &buf);
 
 	if (!ret)
 		error(_("no provenance record for '%s'"),
