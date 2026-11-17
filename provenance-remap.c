@@ -39,7 +39,7 @@ static void records_ref_init(struct repository *r, struct records_ref *ref,
 		init_notes(&ref->t, name, combine_notes_overwrite,
 			   NOTES_INIT_EMPTY);
 	} else {
-		/* the commit that the update replaces, as "purge" reads it */
+		/* the commit that the update replaces, not the ref */
 		init_notes(&ref->t, oid_to_hex(&ref->old_oid),
 			   combine_notes_overwrite, 0);
 	}

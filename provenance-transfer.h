@@ -113,9 +113,9 @@ int provenance_fetch_rejected(struct repository *r, const char *remote_name,
 /*
  * Return the name of a provenance ref that the push whose result is
  * `refs` failed to update because the remote moved, and whose history
- * was rewritten locally, as "git provenance purge" does: the tracking
- * ref of the remote `remote_name` is not in the history of the local
- * ref.  Return NULL if there is none.
+ * was rewritten locally: the tracking ref of the remote `remote_name`
+ * is not in the history of the local ref.  Return NULL if there is
+ * none.
  */
 const char *provenance_rewritten_locally(struct repository *r,
 					 const char *remote_name,

@@ -704,10 +704,9 @@ test_expect_success 'remote prune leaves the tracking refs of an opted-out remot
 '
 
 
-# Rewrite the history of refs/provenance/lines in <repo> as "git
-# provenance purge" does for the reasoning ref: replace it with one
-# commit without a parent whose tree is that of the ref without the
-# record of <commit>.
+# Rewrite the history of refs/provenance/lines in <repo>: replace it
+# with one commit without a parent whose tree is that of the ref
+# without the record of <commit>.
 #
 # Usage: rewrite_without <repo> <commit>
 rewrite_without () {

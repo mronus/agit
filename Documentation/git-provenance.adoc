@@ -13,10 +13,6 @@ git provenance show [--reasoning] <commit>
 git provenance verify [<commit>...]
 git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...
 git provenance remap [--dry-run] [<file>]
-git provenance purge [--dry-run] <revision-range>...
-git provenance purge [--dry-run] --session <id>... [<revision-range>...]
-git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
-		     [<revision-range>...]
 git provenance prune [--dry-run]
 git provenance stat [--porcelain] [--no-cache] [<revision-range>...]
 
@@ -40,9 +36,9 @@ PROVENANCE sections).
 This command reads and checks records, gives records to commits made
 without them from the records of the commits they were made from
 (`adopt`), carries records over to the commits that replace theirs
-under other object ids (`remap`), removes what reasoning records must
-not hold (`purge`) and the records of commits that are gone
-(`prune`), and sums the line records of a range of history (`stat`).  See
+under other object ids (`remap`), removes the records of commits that
+are gone (`prune`), and sums the line records of a range of history
+(`stat`).  See
 linkgit:git-notes[1] for a way to attach a record by hand.
 
 COMMANDS
@@ -143,54 +139,6 @@ The pairs of the blobs of the stream, and of the commits whose ids
 did not change, are ignored.  The records that are not carried over
 stay keyed by the old ids, where `prune` removes them.
 
-`purge [--dry-run] <revision-range>...`::
-`purge [--dry-run] --session <id>... [<revision-range>...]`::
-`purge [--dry-run] [-E | -F] [-i] --redact <pattern> [<revision-range>...]`::
-	Remove from the reasoning records what they must not hold, such
-	as a secret that an AI session wrote into a summary.  Only
-	`refs/provenance/reasoning` is rewritten.  Line records are left
-	alone: they hold marks, session ids, and model and tool names,
-	but no free text.  Commits are named as for `adopt`.
-+
---
-_<revision-range>_ alone;;
-	Remove the reasoning records of the commits.
-`--session <id>`;;
-	Drop the `session` line of _<id>_ from each reasoning record that
-	has one, or from those of the given commits.  The summary of such
-	a record is dropped as well, as it cannot be told which session
-	wrote what, and a record left without a `session` line is removed,
-	as it would state that no AI was involved.  Can be given more
-	than once.
-`--redact <pattern>`;;
-	Replace each match of _<pattern>_ in the summary of each
-	reasoning record, or of those of the given commits, with
-	`***REMOVED***`.  The `version`, `commit` and `session` lines are
-	never changed.
---
-+
-A record that none of these changes is kept as it is, as is a record
-that cannot be parsed, with a warning.  One line is printed per record
-that is changed: `<object-id> removed`, `<object-id> redacted <n>`
-with the number of matches replaced, or `<object-id> session
-dropped`, where _<object-id>_ names the commit of the record.
-+
-The records that are left are written as one new commit of
-`refs/provenance/reasoning` without a parent, so that neither the
-purged records nor the history of the ref that held them can be
-reached from it any more; nothing is written if no record is changed.
-The old records still exist until they are dropped: replace the ref
-of the remote with `git push --force <remote>
-refs/provenance/reasoning`, which also updates its tracking ref (see
-linkgit:git-push[1]), and then run `git reflog expire --expire=now
-refs/provenance/reasoning` and `git gc --prune=now` in this
-repository.  Other clones take the rewrite with their next fetch,
-which keeps the records they added since (see linkgit:git-fetch[1]).
-A clone that pushes its own `refs/provenance/reasoning` with `--force`
-without fetching first brings the purged records back, as it would
-for any rewritten history; so does a copy made by other means, such
-as a mail or a backup.
-
 `prune [--dry-run]`::
 	Remove the line and reasoning records of the commits that are
 	not objects of the repository, as linkgit:git-notes[1] `prune`
@@ -210,7 +158,7 @@ as a mail or a backup.
 	of the added lines that are `AI` or `MIXED`.  The commits are
 	walked as linkgit:git-log[1] walks them: without a range, the
 	history of `HEAD`; a single commit names its history, not that
-	commit alone as for `adopt` and `purge` (`<commit>^!` names one
+	commit alone as for `adopt` (`<commit>^!` names one
 	commit).  Options that limit the walk, such as `--since` or
 	`--author`, are taken as `git log` takes them; paths are not.
 +
@@ -272,31 +220,8 @@ OPTIONS
 
 `-n`::
 `--dry-run`::
-	With `remap`, `purge` and `prune`, print what would be done,
+	With `remap` and `prune`, print what would be done,
 	without writing anything.
-
-`--session <id>`::
-	With `purge`, drop the session _<id>_ from the reasoning
-	records.
-
-`--redact <pattern>`::
-	With `purge`, replace the matches of _<pattern>_ in the summaries
-	of the reasoning records.  _<pattern>_ is a basic regular
-	expression, as `git log --grep` takes it, and matches within a
-	line.
-
-`-E`::
-`--extended-regexp`::
-	With `--redact`, _<pattern>_ is an extended regular expression.
-
-`-F`::
-`--fixed-strings`::
-	With `--redact`, _<pattern>_ is a fixed string, such as a leaked
-	key, whose characters have no special meaning.
-
-`-i`::
-`--regexp-ignore-case`::
-	With `--redact`, match _<pattern>_ ignoring case.
 
 EXIT STATUS
 -----------
@@ -310,11 +235,11 @@ is found is not a failure.  `remap` exits with status 0 unless an
 error occurred, such as a line of its input that is not a pair of
 object ids, which is reported with its number, or records that could
 not be read or written; a pair that is skipped is not a failure, and
-nothing is written after an error.  `purge` and `prune` exit with
-status 0 unless an error occurred, also when there is nothing to
-remove.  `stat` exits with status 0 unless the line records cannot be
-read; a commit without a record, or with one that does not parse, is
-not a failure.  All of them exit with status 128 if an argument is
+nothing is written after an error.  `prune` exits with status 0
+unless an error occurred, also when there is nothing to remove.
+`stat` exits with status 0 unless the line records cannot be read; a
+commit without a record, or with one that does not parse, is not a
+failure.  All of them exit with status 128 if an argument is
 not a commit.
 
 SEE ALSO
