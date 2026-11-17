@@ -7,35 +7,33 @@ struct remote;
 struct repository;
 
 /*
- * The provenance refs of a remote are fetched into tracking refs, as
+ * The provenance ref of a remote is fetched into a tracking ref, as
  * branches are fetched into remote-tracking branches:
- * refs/provenance/<kind> of the remote "origin" lands in
- * refs/provenance/remotes/origin/<kind>, and is then merged into the
- * local refs/provenance/<kind>.  See the "Transfer" section of
+ * refs/provenance/lines of the remote "origin" lands in
+ * refs/provenance/remotes/origin/lines, and is then merged into the
+ * local refs/provenance/lines.  See the "Transfer" section of
  * Documentation/technical/git-provenance.adoc.
  */
 #define PROVENANCE_TRACKING_PREFIX "refs/provenance/remotes/"
 
 /*
- * Append to `out` the refspecs that fetch the provenance refs of
- * `remote` into its tracking refs, if provenance is enabled in `r`,
+ * Append to `out` the refspec that fetches the provenance ref of
+ * `remote` into its tracking ref, if provenance is enabled in `r`,
  * `remote` is a configured remote and "remote.<name>.provenance" is
- * not false.  The reasoning ref is fetched
- * only if "provenance.reasoning.fetch" is "always".  A provenance ref
- * that is already mapped by `cmdline` (the refspecs given on the
- * command line, if any) or by the configured refspecs of `remote`,
- * as a mirror refspec maps it, is left out.  Nothing is appended if
- * `cmdline` only names object ids to fetch without storing them in
- * refs, as the lazy fetch of a partial clone does: such a fetch
- * updates no refs.  The refspecs name the refs exactly: a caller must
- * allow them to be missing on the remote.
+ * not false.  Nothing is appended if the provenance ref is already
+ * mapped by `cmdline` (the refspecs given on the command line, if any)
+ * or by the configured refspecs of `remote`, as a mirror refspec maps
+ * it, or if `cmdline` only names object ids to fetch without storing
+ * them in refs, as the lazy fetch of a partial clone does: such a
+ * fetch updates no refs.  The refspec names the ref exactly: a caller
+ * must allow it to be missing on the remote.
  */
 void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
 			       struct refspec *cmdline, struct refspec *out);
 
 /*
- * Merge each tracking ref of the remote `remote_name` that the fetch
- * described by `ref_map` updated into the local provenance ref, as
+ * Merge the tracking ref of the remote `remote_name`, if the fetch
+ * described by `ref_map` updated it, into the local provenance ref, as
  * the "Transfer" section of the design describes: create it,
  * fast-forward it, or make a merge commit whose tree is the union of
  * both sides, keeping the local record (with a warning) for a commit
@@ -43,24 +41,22 @@ void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
  * the value the tracking ref had before the fetch is in the history
  * of one side only, the other side rewrote the history of the ref:
  * the merge is made against that value and has the side that rewrote
- * it as its only parent.  With `verbose` > 0, report each merged
- * ref on stderr.  Nothing is merged if "remote.<name>.provenance" of
+ * it as its only parent.  With `verbose` > 0, report the merge on
+ * stderr.  Nothing is merged if "remote.<name>.provenance" of
  * `remote_name` is false.  Returns 0 on success and -1, after
- * reporting an error, if a ref could not be merged.
+ * reporting an error, if the ref could not be merged.
  */
 int provenance_merge_fetched(struct repository *r, const char *remote_name,
 			     const struct ref *ref_map, int verbose);
 
 /*
- * Append to `out` the refspecs that push the local provenance refs
+ * Append to `out` the refspec that pushes the local provenance ref
  * along with the refs that `rs` and the transport flags `flags` push
- * to `remote`.  They are added only if provenance is enabled, `remote`
+ * to `remote`.  It is added only if provenance is enabled, `remote`
  * is a configured remote whose "remote.<name>.provenance" is not
  * false, the push updates at least one ref under refs/heads/ on the
- * remote and is neither a mirror nor a pruning push, and the local
- * provenance ref exists.  The reasoning ref is pushed only if
- * "provenance.reasoning.push" is "always".  A provenance ref that `rs`
- * already names is left out.
+ * remote and is neither a mirror nor a pruning push, the local
+ * provenance ref exists, and `rs` does not name it already.
  */
 void provenance_push_refspecs(struct repository *r, struct remote *remote,
 			      const struct refspec *rs, int flags,

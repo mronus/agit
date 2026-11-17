@@ -197,43 +197,41 @@ PROVENANCE
 
 If provenance is enabled (see `provenance.enabled` in
 linkgit:git-config[1]), fetching from a configured remote _<name>_
-also fetches its provenance refs, whether the refspecs come from
+also fetches its provenance ref, whether the refspecs come from
 `remote.<name>.fetch` or from the command line: `refs/provenance/lines`
-is stored in `refs/provenance/remotes/<name>/lines` and, unless
-`provenance.reasoning.fetch` is `never`, `refs/provenance/reasoning` in
-`refs/provenance/remotes/<name>/reasoning`.  As if they were
+is stored in `refs/provenance/remotes/<name>/lines`.  As if
 
 ------------------------------------------------
 +refs/provenance/lines:refs/provenance/remotes/<name>/lines
-+refs/provenance/reasoning:refs/provenance/remotes/<name>/reasoning
 ------------------------------------------------
 
-were added to the refspecs, but nothing is written to the
-configuration, a remote without provenance refs is not an error, and
-the refs are not written to `FETCH_HEAD`.  A provenance ref that the
-refspecs already map, as the `+refs/*:refs/*` refspec of a mirror
-does, is fetched as they say instead.  Nothing is added when fetching
+was added to the refspecs, but nothing is written to the
+configuration, a remote without a provenance ref is not an error, and
+the ref is not written to `FETCH_HEAD`.  If the refspecs already map
+the provenance ref, as the `+refs/*:refs/*` refspec of a mirror does,
+it is fetched as they say instead.  Nothing is added when fetching
 from a URL or with `--prefetch`, or from a remote whose
 `remote.<name>.provenance` is false; refspecs that name the provenance
-refs explicitly are still used as given.  `--prune` deletes the
-tracking refs of provenance refs that the remote no longer has.
+ref explicitly are still used as given.  `--prune` deletes the
+tracking ref if the remote no longer has the provenance ref.
 
-Each tracking ref that the fetch updated is then merged into the local
-`refs/provenance/lines` or `refs/provenance/reasoning`: the local ref
-is created if it does not exist, left alone if it already contains the
-fetched records, and fast-forwarded if it is an ancestor of them.
-Otherwise a merge commit is made whose tree has the records of both
-sides; if both sides changed the record of the same commit, the local
-one is kept and a warning names the commit.  With `--verbose`, each
-merged ref is reported.  `--dry-run` merges nothing.
+If the fetch updated the tracking ref, it is then merged into the
+local `refs/provenance/lines`: the local ref is created if it does not
+exist, left alone if it already contains the fetched records, and
+fast-forwarded if it is an ancestor of them.  Otherwise a merge commit
+is made whose tree has the records of both sides; if both sides
+changed the record of the same commit, the local one is kept and a
+warning names the commit.  With `--verbose`, the merge is reported.
+`--dry-run` merges nothing.
 
 If the two sides share no history because one of them rewrote it, as
 when records are removed by replacing the ref with a commit without a
 parent, the value the tracking ref had before the fetch tells which
 side did: the merge is made against that value and has the rewritten
 side as its only parent, so that a rewrite on either side is kept and
-the records added on the other side since then are carried over.  When this does not
-tell, as in a shallow clone, the merge takes the records of both.
+the records added on the other side since then are carried over.
+When this does not tell, as in a shallow clone, the merge takes the
+records of both.
 
 OUTPUT
 ------

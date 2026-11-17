@@ -23,38 +23,10 @@
 #include "strvec.h"
 #include "transport.h"
 
-/* The provenance refs, as the last component of their names. */
-static const char *const kinds[] = { "lines", "reasoning" };
-
-static const char *local_ref_of(const char *kind)
+/* The tracking ref of refs/provenance/lines for `remote_name`. */
+static void tracking_ref_of(struct strbuf *out, const char *remote_name)
 {
-	return !strcmp(kind, "lines") ?
-		PROVENANCE_LINES_REF : PROVENANCE_REASONING_REF;
-}
-
-static void tracking_ref_of(struct strbuf *out, const char *remote_name,
-			    const char *kind)
-{
-	strbuf_addf(out, PROVENANCE_TRACKING_PREFIX "%s/%s", remote_name, kind);
-}
-
-/*
- * Return whether the reasoning ref is transferred according to the
- * configuration variable `key`, "provenance.reasoning.fetch" or
- * "provenance.reasoning.push".
- */
-static int reasoning_wanted(struct repository *r, const char *key)
-{
-	const char *value;
-
-	if (repo_config_get_string_tmp(r, key, &value) ||
-	    !strcmp(value, "always"))
-		return 1;
-	if (!strcmp(value, "never"))
-		return 0;
-	if (!strcmp(value, "ondemand"))
-		die(_("%s=ondemand is not supported yet"), key);
-	die(_("invalid value for '%s': '%s'"), key, value);
+	strbuf_addf(out, PROVENANCE_TRACKING_PREFIX "%s/lines", remote_name);
 }
 
 /* Return whether "remote.<name>.provenance" of `remote_name` is false. */
@@ -111,24 +83,16 @@ static int fetches_objects_only(const struct refspec *rs)
 void provenance_fetch_refspecs(struct repository *r, struct remote *remote,
 			       struct refspec *cmdline, struct refspec *out)
 {
-	if (!remote_transfers(r, remote) || fetches_objects_only(cmdline))
+	struct strbuf tracking = STRBUF_INIT;
+
+	if (!remote_transfers(r, remote) || fetches_objects_only(cmdline) ||
+	    (cmdline && refspec_maps(cmdline, PROVENANCE_LINES_REF)) ||
+	    refspec_maps(&remote->fetch, PROVENANCE_LINES_REF))
 		return;
 
-	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
-		const char *ref = local_ref_of(kinds[i]);
-		struct strbuf tracking = STRBUF_INIT;
-
-		if (!strcmp(kinds[i], "reasoning") &&
-		    !reasoning_wanted(r, "provenance.reasoning.fetch"))
-			continue;
-		if ((cmdline && refspec_maps(cmdline, ref)) ||
-		    refspec_maps(&remote->fetch, ref))
-			continue;
-
-		tracking_ref_of(&tracking, remote->name, kinds[i]);
-		refspec_appendf(out, "+%s:%s", ref, tracking.buf);
-		strbuf_release(&tracking);
-	}
+	tracking_ref_of(&tracking, remote->name);
+	refspec_appendf(out, "+%s:%s", PROVENANCE_LINES_REF, tracking.buf);
+	strbuf_release(&tracking);
 }
 
 struct merge_state {
@@ -407,23 +371,19 @@ static const struct ref *fetch_update(const struct ref *ref_map,
 int provenance_merge_fetched(struct repository *r, const char *remote_name,
 			     const struct ref *ref_map, int verbose)
 {
+	struct strbuf tracking = STRBUF_INIT;
+	const struct ref *rm;
 	int ret = 0;
 
 	if (opted_out(r, remote_name))
 		return 0;
 
-	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
-		struct strbuf tracking = STRBUF_INIT;
-		const struct ref *rm;
-
-		tracking_ref_of(&tracking, remote_name, kinds[i]);
-		rm = fetch_update(ref_map, tracking.buf);
-		if (rm && merge_one(r, remote_name, local_ref_of(kinds[i]),
-				    tracking.buf, &rm->peer_ref->old_oid,
-				    verbose))
-			ret = -1;
-		strbuf_release(&tracking);
-	}
+	tracking_ref_of(&tracking, remote_name);
+	rm = fetch_update(ref_map, tracking.buf);
+	if (rm && merge_one(r, remote_name, PROVENANCE_LINES_REF,
+			    tracking.buf, &rm->peer_ref->old_oid, verbose))
+		ret = -1;
+	strbuf_release(&tracking);
 	return ret;
 }
 
@@ -499,26 +459,16 @@ void provenance_push_refspecs(struct repository *r, struct remote *remote,
 		branch = 1;
 	for (int i = 0; !branch && i < rs->nr; i++)
 		branch = pushes_branch(r, &rs->items[i]);
-	if (!branch)
+	if (!branch || refspec_names(rs, PROVENANCE_LINES_REF) ||
+	    !refs_ref_exists(get_main_ref_store(r), PROVENANCE_LINES_REF))
 		return;
-
-	for (size_t i = 0; i < ARRAY_SIZE(kinds); i++) {
-		const char *ref = local_ref_of(kinds[i]);
-
-		if (!strcmp(kinds[i], "reasoning") &&
-		    !reasoning_wanted(r, "provenance.reasoning.push"))
-			continue;
-		if (refspec_names(rs, ref) ||
-		    !refs_ref_exists(get_main_ref_store(r), ref))
-			continue;
-		refspec_appendf(out, "%s:%s", ref, ref);
-	}
+	refspec_appendf(out, "%s:%s", PROVENANCE_LINES_REF,
+			PROVENANCE_LINES_REF);
 }
 
 static int is_provenance_ref(const char *name)
 {
-	return !strcmp(name, PROVENANCE_LINES_REF) ||
-	       !strcmp(name, PROVENANCE_REASONING_REF);
+	return !strcmp(name, PROVENANCE_LINES_REF);
 }
 
 static int remote_moved(const struct ref *ref)
@@ -607,16 +557,14 @@ void provenance_update_tracking(struct repository *r, struct remote *remote,
 
 	for (const struct ref *ref = refs; ref; ref = ref->next) {
 		struct strbuf tracking = STRBUF_INIT;
-		const char *kind;
 
 		if ((ref->status != REF_STATUS_OK &&
 		     ref->status != REF_STATUS_UPTODATE) ||
 		    !is_provenance_ref(ref->name) ||
-		    refspec_maps(&remote->fetch, ref->name) ||
-		    !skip_prefix(ref->name, "refs/provenance/", &kind))
+		    refspec_maps(&remote->fetch, ref->name))
 			continue;
 
-		tracking_ref_of(&tracking, remote->name, kind);
+		tracking_ref_of(&tracking, remote->name);
 		if (ref->deletion)
 			refs_delete_ref(store, "update by push", tracking.buf,
 					NULL, 0);
@@ -638,13 +586,11 @@ const char *provenance_rewritten_locally(struct repository *r,
 		struct strbuf tracking = STRBUF_INIT;
 		struct object_id ours_oid, theirs_oid;
 		struct commit *ours, *theirs;
-		const char *kind;
 		int rewritten = 0;
 
-		if (!is_provenance_ref(ref->name) || !remote_moved(ref) ||
-		    !skip_prefix(ref->name, "refs/provenance/", &kind))
+		if (!is_provenance_ref(ref->name) || !remote_moved(ref))
 			continue;
-		tracking_ref_of(&tracking, remote_name, kind);
+		tracking_ref_of(&tracking, remote_name);
 		if (!refs_read_ref(store, ref->name, &ours_oid) &&
 		    !refs_read_ref(store, tracking.buf, &theirs_oid) &&
 		    (ours = lookup_commit_reference_gently(r, &ours_oid, 1)) &&
@@ -667,14 +613,11 @@ int provenance_fetch_rejected(struct repository *r, const char *remote_name,
 	strvec_pushl(&cmd.args, "fetch", "--quiet", "--no-tags",
 		     "--no-write-fetch-head", "--", remote_name, NULL);
 	for (const struct ref *ref = refs; ref; ref = ref->next) {
-		const char *kind;
-
-		if (!is_provenance_ref(ref->name) || !remote_moved(ref) ||
-		    !skip_prefix(ref->name, "refs/provenance/", &kind))
+		if (!is_provenance_ref(ref->name) || !remote_moved(ref))
 			continue;
 		strvec_pushf(&cmd.args,
-			     "+%s:" PROVENANCE_TRACKING_PREFIX "%s/%s",
-			     ref->name, remote_name, kind);
+			     "+%s:" PROVENANCE_TRACKING_PREFIX "%s/lines",
+			     ref->name, remote_name);
 	}
 	ret = run_command(&cmd);
 
