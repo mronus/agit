@@ -214,15 +214,15 @@ linkgit:git-config[1]).
 PROVENANCE
 ----------
 
-The provenance refs of a remote _<name>_ are fetched into
-`refs/provenance/remotes/<name>/lines` and
-`refs/provenance/remotes/<name>/reasoning` (see the PROVENANCE section
-of linkgit:git-fetch[1]).  `git remote remove` deletes them with the
-other refs of the remote, and `git remote rename` renames them along
-with their reflogs.  `git remote prune` and `git remote update
---prune` delete those whose provenance ref the remote no longer has,
-unless `remote.<name>.provenance` is false; `git remote show` lists
-them only as such stale refs.
+The provenance ref of a remote _<name>_ is fetched into
+`refs/provenance/remotes/<name>/lines` (see the PROVENANCE section of
+linkgit:git-fetch[1]).  `git remote remove` deletes the refs under
+`refs/provenance/remotes/<name>/` with the other refs of the remote,
+and `git remote rename` renames them along with their reflogs.  `git
+remote prune` and `git remote update --prune` delete the tracking ref
+if the remote no longer has the provenance ref, unless
+`remote.<name>.provenance` is false; `git remote show` lists it only
+as such a stale ref.
 
 EXIT STATUS
 -----------

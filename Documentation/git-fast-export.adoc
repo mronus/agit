@@ -305,10 +305,9 @@ PROVENANCE
 ----------
 
 The provenance records of commits (see linkgit:git-provenance[1]) are
-kept as notes under `refs/provenance/lines` and
-`refs/provenance/reasoning`, keyed by the object name of the commit
-they describe.  `git fast-export` exports these refs like any other
-ref when they are named, or with `--all`, and nothing implicitly:
+kept as notes under `refs/provenance/lines`, keyed by the object name
+of the commit they describe.  `git fast-export` exports this ref like
+any other ref when it is named, or with `--all`, and nothing implicitly:
 an export of a branch alone carries no records.  Imported by
 linkgit:git-fast-import[1], the records are found again as long as
 the commits keep their object names; a stream that changes them, as

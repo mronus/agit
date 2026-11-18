@@ -393,28 +393,6 @@ void provenance_marks_release(struct provenance_marks *marks)
 	marks->pre_nr = marks->post_nr = 0;
 }
 
-/* As read_lines(), for the reasoning record of `commit`. */
-static int read_reasoning(struct repository *r, const struct object_id *commit,
-			  struct provenance_reasoning *rec)
-{
-	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
-	int ret = -1;
-
-	if (provenance_read_reasoning(r, commit, &buf) <= 0)
-		goto out;
-	if (provenance_reasoning_parse(buf.buf, buf.len, r->hash_algo,
-				       rec, &err)) {
-		warning(_("ignoring malformed reasoning record of %s: %s"),
-			oid_to_hex(commit), err.buf);
-		goto out;
-	}
-	ret = 0;
-out:
-	strbuf_release(&buf);
-	strbuf_release(&err);
-	return ret;
-}
-
 /* The share of the added lines that are marked AI or MIXED, in percent. */
 static void format_share(const struct provenance_record *rec,
 			 struct strbuf *sb)
@@ -457,26 +435,16 @@ int provenance_format_field(struct repository *r,
 	int models = !xstrncmpz("models", field, len);
 	int sessions = !xstrncmpz("sessions", field, len);
 
-	if (!xstrncmpz("summary", field, len)) {
-		struct provenance_reasoning rec = PROVENANCE_REASONING_INIT;
+	struct provenance_record rec = PROVENANCE_RECORD_INIT;
 
-		if (!read_reasoning(r, commit, &rec)) {
-			strbuf_strip_suffix(&rec.summary, "\n");
-			strbuf_addbuf(sb, &rec.summary);
-		}
-		provenance_reasoning_release(&rec);
-	} else if (share || models || sessions) {
-		struct provenance_record rec = PROVENANCE_RECORD_INIT;
-
-		if (!read_lines(r, commit, &rec)) {
-			if (share)
-				format_share(&rec, sb);
-			else
-				format_actors(&rec, sessions, sb);
-		}
-		provenance_record_release(&rec);
-	} else {
+	if (!share && !models && !sessions)
 		return -1;
+	if (!read_lines(r, commit, &rec)) {
+		if (share)
+			format_share(&rec, sb);
+		else
+			format_actors(&rec, sessions, sb);
 	}
+	provenance_record_release(&rec);
 	return 0;
 }

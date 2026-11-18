@@ -1734,7 +1734,6 @@ static void do_commit(const struct am_state *state)
 	const char *reflog_msg, *author, *committer = NULL;
 	struct strbuf sb = STRBUF_INIT;
 	struct provenance_record prov_lines = PROVENANCE_RECORD_INIT;
-	struct provenance_reasoning prov_reasoning = PROVENANCE_REASONING_INIT;
 	struct provenance_journal prov_journal = PROVENANCE_JOURNAL_INIT;
 	int record_provenance = provenance_enabled(the_repository) &&
 				(!state->rebasing ||
@@ -1802,8 +1801,7 @@ static void do_commit(const struct am_state *state)
 		}
 		if (provenance_commit_records(the_repository,
 				parents, &tree, author,
-				NULL, &rw, &prov_journal, &prov_lines,
-				&prov_reasoning))
+				NULL, &rw, &prov_journal, &prov_lines))
 			die(_("unable to record provenance"));
 		provenance_record_release(&mailed);
 	}
@@ -1826,8 +1824,8 @@ static void do_commit(const struct am_state *state)
 		    ref_transaction_update(transaction, "HEAD", &commit, old_oid,
 					   NULL, NULL, 0, sb.buf, &err) ||
 		    provenance_queue_records(the_repository, transaction,
-					     &commit, &prov_lines,
-					     &prov_reasoning, reflog_msg, &err) ||
+					     &commit, &prov_lines, reflog_msg,
+					     &err) ||
 		    ref_transaction_commit(transaction, &err))
 			die("%s", err.buf);
 		ref_transaction_free(transaction);
@@ -1855,7 +1853,6 @@ static void do_commit(const struct am_state *state)
 	run_hooks(the_repository, "post-applypatch");
 
 	provenance_record_release(&prov_lines);
-	provenance_reasoning_release(&prov_reasoning);
 	provenance_journal_release(&prov_journal);
 	commit_list_free(parents);
 	strbuf_release(&sb);

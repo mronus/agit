@@ -5,7 +5,6 @@ struct commit;
 struct commit_list;
 struct object_id;
 struct provenance_journal;
-struct provenance_reasoning;
 struct provenance_record;
 struct repository;
 
@@ -28,13 +27,11 @@ struct repository;
  * `human` identifies the human who made the commit, as
  * "Name <email>".
  *
- * On success the line record is stored in `lines` and the reasoning
- * record in `reasoning`, which must have been initialized with
- * PROVENANCE_RECORD_INIT and PROVENANCE_REASONING_INIT; their commit
- * ids are left for the caller to fill in.  The reasoning record names
- * no session if no session is attached to the commit.  Stamps whose
- * objects are missing are skipped with a warning.  Returns 0 on
- * success, or -1 after reporting an error.
+ * On success the line record is stored in `lines`, which must have
+ * been initialized with PROVENANCE_RECORD_INIT; its commit id is left
+ * for the caller to fill in.  Stamps whose objects are missing are
+ * skipped with a warning.  Returns 0 on success, or -1 after reporting
+ * an error.
  *
  * The stamps are used by the commit that HEAD pointed at when they
  * were made: those taken on the commit HEAD points at now make the
@@ -48,22 +45,13 @@ int provenance_attribute(struct repository *r,
 			 struct provenance_journal *journal,
 			 const char *session,
 			 const char *human,
-			 struct provenance_record *lines,
-			 struct provenance_reasoning *reasoning);
+			 struct provenance_record *lines);
 
-/* A commit whose records seed the attribution of a rewritten commit. */
+/* A commit whose line record seeds the attribution of a rewritten commit. */
 struct provenance_source {
 	struct commit *commit;
 	/* NULL if the commit has no line record */
 	const struct provenance_record *lines;
-	/* NULL if the commit has no reasoning record */
-	const struct provenance_reasoning *reasoning;
-	/*
-	 * The commit may not be one that the new commit was made from:
-	 * its reasoning record is only carried over if a line of the new
-	 * commit takes its owners from it.
-	 */
-	unsigned tentative : 1;
 	/*
 	 * The new commit undoes the changes of the commit.  The lines
 	 * that the commit deleted, which the new commit restores, are
@@ -72,8 +60,7 @@ struct provenance_source {
 	 * of the commit that introduced it; such a line is UNKNOWN if
 	 * that commit has no line record or the range is UNKNOWN.  The
 	 * lines that the commit added, which the new commit deletes, are
-	 * attributed as its line record says.  Its reasoning record is
-	 * not carried over.
+	 * attributed as its line record says.
 	 */
 	unsigned revert : 1;
 };
@@ -87,15 +74,14 @@ struct provenance_source {
  * (see the "Re-anchoring" section of
  * Documentation/technical/git-provenance.adoc).  The lines that no
  * source accounts for are UNKNOWN instead of the human's, and
- * `capture` is `adopted`.  The sources are usually tentative.  The
- * journal must be empty.
+ * `capture` is `adopted`.  The journal must be empty.
  */
 #define PROVENANCE_REWRITE_AMEND (1 << 0)
 #define PROVENANCE_REWRITE_ADOPT (1 << 1)
 
 /*
  * As provenance_attribute(), for a commit that rewrites the `nr`
- * commits in `sources`, carrying their records over to it.  See the
+ * commits in `sources`, carrying their line records over to it.  See the
  * "History rewriting" section of
  * Documentation/technical/git-provenance.adoc.
  *
@@ -114,12 +100,6 @@ struct provenance_source {
  * `sources` gives it, preferring a source that has the line as it is
  * to one that has a line it replaces.  The other parents of a merge
  * come after all the sources.
- *
- * The reasoning record names the sessions of the reasoning records of
- * the sources that are not reverts, followed by the sessions the
- * journal attaches to the commit.  The reasoning record of
- * a tentative source is left out if no line of the commit takes its
- * owners from that source.
  */
 int provenance_attribute_rewrite(struct repository *r,
 				 const struct commit_list *parents,
@@ -129,8 +109,7 @@ int provenance_attribute_rewrite(struct repository *r,
 				 struct provenance_journal *journal,
 				 const char *session,
 				 const char *human,
-				 struct provenance_record *lines,
-				 struct provenance_reasoning *reasoning);
+				 struct provenance_record *lines);
 
 /*
  * The attribution walk for one path at a time, as used to show the

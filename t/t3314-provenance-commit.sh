@@ -41,27 +41,6 @@ check_lines () {
 	test_cmp expect actual
 }
 
-# Compare the reasoning record of <rev> with the file "expect".
-check_reasoning () {
-	git provenance show --reasoning "$1" >actual &&
-	test_cmp expect actual
-}
-
-# Print the time of the first <type> stamp of <session>, or the last
-# one with "last".
-#
-# Usage: stamp_time (begin|end) <session> [last]
-stamp_time () {
-	git stamp list --session "$2" >stamps.out &&
-	sed -n -e "s/^$1 \([0-9]*\) .*/\1/p" stamps.out >times.out &&
-	if test "$3" = last
-	then
-		tail -n 1 times.out
-	else
-		head -n 1 times.out
-	fi
-}
-
 check_advice () {
 	test_grep "^hint: no session is linked to this commit; if the change came from an$" "$1" &&
 	test_grep "^hint: LLM session, provide its details with --session$" "$1"
@@ -93,7 +72,6 @@ test_expect_success 'setup' '
 		echo "+ 1-5 HUMAN human $(git rev-parse HEAD:file)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -156,7 +134,6 @@ test_expect_success 'human changes are HUMAN' '
 		echo "- 2 HUMAN human $(anchor HEAD^ file 2)"
 	} >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -197,10 +174,15 @@ test_expect_success 'provenance.require refuses a commit without a session' '
 		test_must_fail git rev-parse --verify -q refs/provenance/lines &&
 		git commit -m one --session s1 2>err &&
 		git rev-parse --verify refs/provenance/lines &&
-		git rev-parse --verify refs/provenance/reasoning &&
 		git commit --allow-empty -m empty &&
 		git provenance show HEAD >actual &&
-		test_grep ! "^file " actual
+		test_grep ! "^file " actual &&
+		git stamp begin --session s2 &&
+		echo two >>file &&
+		git stamp end --session s2 &&
+		git commit -a -m stamped &&
+		git provenance show HEAD >actual &&
+		test_grep "^+ 2 AI s2 " actual
 	)
 '
 
@@ -208,9 +190,6 @@ test_expect_success 'begin and end stamps make lines AI' '
 	git stamp begin --session s1 --model m1 --tool t1 &&
 	test_write_lines 1 two 3 four 5 6 7 >file &&
 	git stamp end --session s1 &&
-	echo "The summary." | git stamp reason --session s1 --summary - &&
-	started=$(stamp_time begin s1) &&
-	ended=$(stamp_time end s1 last) &&
 	git commit -a -m ai --session s1 2>err &&
 	test_grep ! "hint:" err &&
 	{
@@ -222,14 +201,6 @@ test_expect_success 'begin and end stamps make lines AI' '
 		echo "- 4 AI s1 $(anchor HEAD^ file 4)"
 	} >expect &&
 	check_lines HEAD &&
-	cat >expect <<-EOF &&
-	version 1
-	commit $(git rev-parse HEAD)
-	session s1 model=m1 tool=t1 started=$started ended=$ended
-
-	The summary.
-	EOF
-	check_reasoning HEAD &&
 	git provenance verify HEAD &&
 	test_path_is_missing .git/provenance/journal &&
 	git stamp list >actual &&
@@ -245,72 +216,6 @@ test_expect_success 'stamps without --session give no advice' '
 	git provenance verify HEAD
 '
 
-test_expect_success 'AI lines without a reason give a warning' '
-	test_when_finished "rm -rf repo" &&
-	git init repo &&
-	(
-		cd repo &&
-		echo one >file &&
-		git add file &&
-		git commit -m human 2>err &&
-		test_grep ! "no reasoning" err &&
-		git stamp begin --session s1 &&
-		echo two >>file &&
-		git stamp end --session s1 &&
-		git commit -a -m ai 2>err &&
-		cat >expect <<-EOF &&
-		warning: commit $(git rev-parse --short HEAD) has lines written by AI session s1 but no reasoning
-		hint: record why with \`git stamp reason --session s1 --summary -\`,
-		hint: then \`git commit --amend --no-edit\` if the commit is not pushed yet
-		hint: Disable this message with "git config set advice.provenanceReason false"
-		EOF
-		grep -e "^warning:" -e "^hint:" err >actual &&
-		test_cmp expect actual &&
-		echo "The summary." | git stamp reason --session s1 --summary - &&
-		git commit --amend --no-edit 2>err &&
-		test_grep ! "no reasoning" err &&
-		git provenance show --reasoning HEAD >actual &&
-		test_grep "^The summary.$" actual &&
-		git commit --amend -m amended 2>err &&
-		test_grep ! "no reasoning" err
-	)
-'
-
-test_expect_success 'a reason silences the warning' '
-	test_when_finished "rm -rf repo" &&
-	git init repo &&
-	(
-		cd repo &&
-		git stamp begin --session s1 &&
-		echo one >file &&
-		git stamp end --session s1 &&
-		echo "The summary." | git stamp reason --session s1 --summary - &&
-		git add file &&
-		git commit -m ai 2>err &&
-		test_grep ! "no reasoning" err
-	)
-'
-
-test_expect_success 'the warning names each AI session and ignores --quiet' '
-	test_when_finished "rm -rf repo" &&
-	git init repo &&
-	(
-		cd repo &&
-		git config advice.provenanceReason false &&
-		git stamp begin --session s1 &&
-		echo one >file &&
-		git stamp end --session s1 &&
-		git stamp begin --session s2 &&
-		echo two >>file &&
-		git stamp end --session s2 &&
-		git add file &&
-		git commit -q -m ai 2>err &&
-		test_grep "AI session s1 but no reasoning" err &&
-		test_grep "AI session s2 but no reasoning" err &&
-		test_grep ! "hint:" err
-	)
-'
-
 test_expect_success '--session must be valid' '
 	test_must_fail git commit --allow-empty -m invalid \
 		--session "has space" 2>err &&
@@ -322,8 +227,6 @@ test_expect_success 'lines edited by AI and human are MIXED' '
 	git stamp begin --session s2 &&
 	test_write_lines one two 3 four FIVE 6 7 8 9 >file &&
 	git stamp end --session s2 &&
-	started=$(stamp_time begin s2) &&
-	ended=$(stamp_time end s2) &&
 	test_write_lines one two 3 four FIVE 6 7 8 nine >file &&
 	git commit -a -m mixed &&
 	{
@@ -338,13 +241,6 @@ test_expect_success 'lines edited by AI and human are MIXED' '
 		echo "- 5 HUMAN human $(anchor HEAD^ file 5)"
 	} >expect &&
 	check_lines HEAD &&
-	cat >expect <<-EOF &&
-	version 1
-	commit $(git rev-parse HEAD)
-	session s2 model=unknown tool=unknown started=$started ended=$ended
-
-	EOF
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -365,9 +261,6 @@ test_expect_success 'two sessions on one line stay AI' '
 		echo "- 3 AI s3 $(anchor HEAD^ file 3)"
 	} >expect &&
 	check_lines HEAD &&
-	git provenance show --reasoning HEAD >actual &&
-	test_grep "^session s3 model=m3 tool=unknown " actual &&
-	test_grep "^session s4 model=unknown tool=t4 " actual &&
 	git provenance verify HEAD
 '
 
@@ -454,13 +347,6 @@ test_expect_success '--session without stamps declares everything' '
 		echo "+ 11 AI s8 $(anchor HEAD file 11)"
 	} >expect &&
 	check_lines HEAD &&
-	cat >expect <<-EOF &&
-	version 1
-	commit $(git rev-parse HEAD)
-	session s8 model=unknown tool=unknown
-
-	EOF
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -598,6 +484,30 @@ test_expect_success 'a path claim claims the whole path' '
 	git provenance verify HEAD
 '
 
+test_expect_success 'commit skips reason entries in the journal silently' '
+	git stamp begin --session s16 &&
+	echo 13a >>file &&
+	echo u >>other &&
+	git stamp end --session s16 &&
+	head=$(git rev-parse HEAD) &&
+	{
+		echo "reason 1 s16 head=$head $(git rev-parse HEAD:file)" &&
+		echo "reason 2 s16 head=$head $ZERO_OID $ZERO_OID"
+	} >>.git/provenance/journal &&
+	git commit -m partial file 2>err &&
+	test_must_be_empty err &&
+	git provenance show HEAD >actual &&
+	test_grep "^+ [0-9]* AI s16 " actual &&
+	git stamp list >actual 2>err &&
+	test_must_be_empty err &&
+	test_line_count = 2 actual &&
+	test_grep ! "^reason " .git/provenance/journal &&
+	git commit -a -m rest 2>err &&
+	test_must_be_empty err &&
+	test_path_is_missing .git/provenance/journal &&
+	git provenance verify HEAD^ HEAD
+'
+
 test_expect_success 'partial commits keep the journal' '
 	git stamp begin --session s11 &&
 	echo 14 >>file &&
@@ -625,19 +535,15 @@ test_expect_success 'provenance.enabled=false leaves the journal alone' '
 	rm .git/provenance/journal
 '
 
-test_expect_success '--amend carries the records of the amended commit over' '
+test_expect_success '--amend carries the record of the amended commit over' '
 	git stamp begin --session s13 &&
 	echo 16 >>file &&
 	git stamp end --session s13 &&
 	git commit -a -m to-amend --session s13 &&
 	git provenance show HEAD >before &&
-	git provenance show --reasoning HEAD >before-reasoning &&
 	git commit --amend -m amended &&
 	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" before >expect &&
 	check_lines HEAD &&
-	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" \
-		before-reasoning >expect &&
-	check_reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -861,11 +767,6 @@ test_expect_success 'merge --squash carries the records of the squashed commits'
 		test_cmp expect actual &&
 		test_grep "^+ 9 AI s2 " actual &&
 		test_grep "^+ 10 AI s1 " actual &&
-		git provenance show --reasoning picked >picked.out &&
-		grep -v "^commit " picked.out >expect &&
-		git provenance show --reasoning HEAD >actual.out &&
-		grep -v "^commit " actual.out >actual &&
-		test_cmp expect actual &&
 		git provenance verify HEAD
 	)
 '
@@ -885,11 +786,9 @@ test_expect_success 'a failed commit leaves no provenance refs' '
 		test_must_fail git commit -m one &&
 		test_must_fail git rev-parse --verify -q HEAD &&
 		test_must_fail git rev-parse --verify -q refs/provenance/lines &&
-		test_must_fail git rev-parse --verify -q refs/provenance/reasoning &&
 		rm .git/hooks/pre-commit &&
 		git commit -m one --session s1 &&
-		git rev-parse --verify refs/provenance/lines &&
-		git rev-parse --verify refs/provenance/reasoning
+		git rev-parse --verify refs/provenance/lines
 	)
 '
 

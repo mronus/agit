@@ -2,13 +2,9 @@ Git Provenance Design Notes
 ===========================
 
 Provenance is an extension to Git that records where the contents of
-a commit came from. Two pieces of information are recorded:
-
-1. The AI reasoning behind each commit: which agent sessions
-   contributed to it and the summary they produced.
-
-2. For each changed line range in a commit, whether the lines were
-   written by an AI agent, by a human, or by both.
+a commit came from: for each changed line range in a commit, whether
+the lines were written by an AI agent, by a human, or by both, and
+which agent sessions wrote them.
 
 The extension ships in agit, a distribution of Git (see "Releases"
 below). In this document, "a git with provenance" means a Git built
@@ -23,11 +19,10 @@ design below.
 
 Objective
 ---------
-Record per-commit reasoning and per-line provenance for every commit
-made with provenance enabled, using only facilities that stock Git
-already transfers, stores and garbage-collects correctly, so that
-provenance is never lost or rejected by a peer that does not know
-about it.
+Record per-line provenance for every commit made with provenance
+enabled, using only facilities that stock Git already transfers,
+stores and garbage-collects correctly, so that provenance is never
+lost or rejected by a peer that does not know about it.
 
 Background
 ----------
@@ -57,8 +52,8 @@ why that route was rejected.
 
 Goals
 -----
-1. Every commit made with provenance enabled carries a reasoning
-   record and a line provenance record.
+1. Every commit made with provenance enabled carries a line
+   provenance record.
 
 2. Line provenance distinguishes AI-written, human-written and mixed
    lines at line granularity, and can be queried for any line of any
@@ -76,10 +71,7 @@ Goals
    re-attached after rewriting done by tools that know nothing about
    it (server-side squash merges, `filter-repo`).
 
-6. Reasoning can be removed or kept private after the fact without
-   rewriting code history, because it may contain secrets.
-
-7. Agents integrate with two command invocations per edit and no
+6. Agents integrate with two command invocations per edit and no
    further knowledge of the extension.
 
 Non-Goals
@@ -107,7 +99,7 @@ Non-Goals
 
 Overview
 --------
-Provenance is stored as ordinary blobs under two refs, keyed by the
+Provenance is stored as ordinary blobs under one ref, keyed by the
 object id of the commit they describe, using the notes tree layout:
 
 ....
@@ -116,14 +108,11 @@ object id of the commit they describe, using the notes tree layout:
  refs/provenance/lines -----> fan-out tree --> <c2> : line record of c2
                                                <c1> : line record of c1
 
- refs/provenance/reasoning -> fan-out tree --> <c2> : reasoning record of c2
-                                               <c1> : reasoning record of c1
-
  c0 has no record: it predates the extension, so its lines are UNKNOWN.
 ....
 
 The records are not part of a commit's identity. Attaching, correcting
-or purging them never changes a commit id.
+or removing them never changes a commit id.
 
 The hard part is capture: Git sees only the final content of a commit
 and cannot know who typed what. The extension therefore keeps a small
@@ -142,22 +131,18 @@ Detailed Design
 
 Refs and records
 ~~~~~~~~~~~~~~~~
-Two refs are used rather than one, split by sensitivity and size:
+One ref holds the records:
 
 `refs/provenance/lines`::
 	Line provenance. Small, structured, not sensitive, needed by
 	`blame` and `diff`. Meant to travel with the code.
 
-`refs/provenance/reasoning`::
-	Reasoning. Potentially large and sensitive. Can be pushed to a
-	different remote than the code, fetched lazily, or not kept.
-
-Each ref points to a commit whose tree is a notes fan-out tree mapping
+The ref points to a commit whose tree is a notes fan-out tree mapping
 a code commit's object id to its record. The ref's own history is an
-audit log of provenance changes and can be rewritten, for instance to
-purge a transcript, without touching code history.
+audit log of provenance changes and can be rewritten without touching
+code history.
 
-The on-disk formats are specified in
+The on-disk format is specified in
 Documentation/technical/git-provenance-format.adoc. The following
 subsections describe what they contain and why.
 
@@ -212,18 +197,6 @@ file src/foo.c
   resolved nothing has a record without `file` blocks.
 
 - Binary files get a single file-level mark.
-
-Reasoning record
-~~~~~~~~~~~~~~~~
-One record per code commit, listing the agent sessions that
-contributed at least one surviving line, with model, tool and
-timestamps, followed by the summary the agent wrote. A commit made
-with provenance enabled to which no session is attached gets no
-reasoning record, which states that no AI was involved.
-
-Full transcripts are optional, policy-controlled
-(`provenance.reasoning.transcripts`), and the first thing to drop for
-privacy. The reasoning record is stored as a single blob.
 
 Marks
 ~~~~~
@@ -284,10 +257,6 @@ inferred by elimination.
 	undoing the edit on the file on disk. Observed-quality, like
 	`begin`/`end`.
 
-`git stamp reason --session <id> --summary <file> [--transcript <file>]`::
-	Called by the agent when it finishes a task. Stores the reasoning
-	for the session in the journal.
-
 `git stamp claim --session <id> (<paths> | --patch <file>)`::
 	Called by an agent at commit time when it has no stamps. Records
 	the named paths or hunks as AI for the session, flagged
@@ -346,8 +315,8 @@ The possible moments to capture, and what each one can know:
                                   edit; human edits by elimination
  staging (git add)   git          content being staged; cannot tell
                                   AI from human on its own
- commit time         agent/human  session id and summary; with the
-                                  journal, the full edit history
+ commit time         agent/human  session id; with the journal, the
+                                  full edit history
  commit, no journal  agent        only the claim "I made this commit"
  after commit        tooling      a patch to attach to an existing
                                   commit; mixed lines can no longer
@@ -402,38 +371,35 @@ removed are not looked for. A path claim made on another commit says
 nothing about this one and is not used; a patch claim is used wherever
 it was made, as it is located by content already.
 
-The reasoning record collects every session whose stamps contributed
-at least one surviving line. Sessions whose work was entirely
-discarded are not attached (configurable).
-
 Commit
 ~~~~~~
-Git computes both records just before the commit object is written,
+Git computes the line record just before the commit object is written,
 once the message is final and the hooks have run. Once the commit
-object is written, it stores the records and updates
-`refs/provenance/lines` and `refs/provenance/reasoning` in the same
-ref transaction as the branch, so either all refs move or none do.
-The notes commits that carry the records are authored and committed
-by the committer ident of the commit, not by the environment's
-author, which a rebase may leave unset or unparsable.
-The commit then consumes the journal: the stamps taken on `HEAD`,
-unless it is a partial commit, which keeps them as taken on the new
-commit, and the stamps taken on other commits that it used. The
-stamps taken on another commit that it did not use stay, so that they
-are taken on `HEAD` again once a branch switch brings `HEAD` back to
-that commit; they are dropped when no branch reaches that commit any
-more. The stamps of an interval during which `HEAD` moved are
-dropped. `provenance.enabled` (on by default) turns all of this off.
+object is written, it stores the record and updates
+`refs/provenance/lines` in the same ref transaction as the branch, so
+either both refs move or neither does. The notes commit that carries
+the record is authored and committed by the committer ident of the
+commit, not by the environment's author, which a rebase may leave
+unset or unparsable. The commit then consumes the journal: the stamps
+taken on `HEAD`, unless it is a partial commit, which keeps them as
+taken on the new commit, and the stamps taken on other commits that it
+used. The stamps taken on another commit that it did not use stay, so
+that they are taken on `HEAD` again once a branch switch brings `HEAD`
+back to that commit; they are dropped when no branch reaches that
+commit any more. The stamps of an interval during which `HEAD` moved
+are dropped. `provenance.enabled` (on by default) turns all of this
+off.
 
-`--session <id>` is how an agent that commits identifies itself. Git
-attaches that session's reasoning; if the journal has stamps for the
+`--session <id>` is how an agent that commits identifies itself, and
+links the session to the commit. If the journal has stamps for the
 session they are used as normal; if it has none, git warns, names the
 session, points to `git stamp claim`, and falls back to `declared`
 attribution: claimed lines are `AI`, the rest `HUMAN`. If the agent
 ignores the warning, everything is `AI` (declared).
 
 A commit made without `--session`, and to which no stamps contributed,
-is recorded with no sessions. Git then prints an advice message
+is recorded with no sessions: no line of its record is attributed to a
+session. Git then prints an advice message
 (`advice.provenanceSession`) saying that if the change came from an
 LLM session, its details can be provided with `--session`. The message
 names the option and nothing more, and is silenced with the usual
@@ -459,15 +425,15 @@ session or the human that rewrites such a line then owns it alone, as
 the parent is dropped before the ranges are made. `--amend` of a merge
 does the same with the parents of the commit being amended.
 
-`git merge` computes the records of the merge commits it makes in the
-same way, with the merge's author as the human and no session, before
-the commit object is written, and writes them in the ref transaction
-that moves `HEAD`; the journal is then consumed, as by `git commit`.
-`git merge` neither takes `--session` nor gives the advice: the merges
-it makes on its own resolve no conflict. A fast-forward makes no
-commit and records nothing, and a merge that stops, with conflicts or
-`--no-commit`, leaves the recording to the `git commit` that concludes
-it.
+`git merge` computes the line records of the merge commits it makes in
+the same way, with the merge's author as the human and no session,
+before the commit object is written, and writes them in the ref
+transaction that moves `HEAD`; the journal is then consumed, as by
+`git commit`. `git merge` neither takes `--session` nor gives the
+advice: the merges it makes on its own resolve no conflict. A
+fast-forward makes no commit and records nothing, and a merge that
+stops, with conflicts or `--no-commit`, leaves the recording to the
+`git commit` that concludes it.
 
 Viewing
 ~~~~~~~
@@ -529,13 +495,12 @@ Viewing
   `provenance-mark` line and a `provenance-actor` line per actor, as
   the record declares it. Records are cached per commit.
 
-- The pretty formats gain `%(provenance:summary)`, the summary of the
-  reasoning record, `%(provenance:share)`, the share of the added
-  lines that are `AI` or `MIXED`, and `%(provenance:models)` and
+- The pretty formats gain `%(provenance:share)`, the share of the
+  added lines that are `AI` or `MIXED`, and `%(provenance:models)` and
   `%(provenance:sessions)`, the models and sessions of the AI actors
   of the line record.
 
-- `provenance show` prints a commit's records; `provenance verify`
+- `provenance show` prints a commit's line record; `provenance verify`
   checks that records parse, refer to paths and ranges that exist,
   and that anchors match.
 
@@ -553,8 +518,9 @@ History rewriting
 Git already copies notes across rewrites (`notes.rewrite.*`,
 `notes.rewriteRef`), but a copied record would describe the diff of
 the old commit, not that of the new one. The extension instead
-computes the records of a rewritten commit from those of the commits
-it rewrites, its sources, with the attribution walk of `git commit`.
+computes the line record of a rewritten commit from those of the
+commits it rewrites, its sources, with the attribution walk of `git
+commit`.
 
 The chain of versions of each changed file gets one step per source
 whose line record has a block for the file, or, for a source without
@@ -589,8 +555,7 @@ parent to the new blob directly.
   source, like those of an `UNKNOWN` range of a record, stay `UNKNOWN`
   wherever they are kept or replaced: `MIXED` would claim that an
   agent and a human both wrote a line whose origin was never seen.
-  The other actors of such a line are not listed, and a session does
-  not get attached to the commit through it.
+  The other actors of such a line are not listed.
 
 - The journal is used and consumed as by `git commit`, so stamps made
   while resolving conflicts count.
@@ -605,16 +570,13 @@ amend::
 	The commit being amended is the source. Lines unchanged since
 	the old commit keep their marks; lines changed since then belong
 	to the session whose stamps changed them or to the human, and
-	deletions keep their marks where they survive. Reasoning
-	is the union of the old record's sessions and those the journal
-	attaches, with the summaries in that order. The lines that an
+	deletions keep their marks where they survive. The lines that an
 	amended commit without a line record, made with stock Git, added
 	are `UNKNOWN`; those the amendment adds are marked as in any
 	commit.
 
 cherry-pick, rebase (pick, reword, edit)::
-	The picked commit is the source. Reasoning is copied as is,
-	followed by sessions the journal attaches.
+	The picked commit is the source.
 
 squash, fixup::
 	`HEAD`, which the new commit replaces, and the commit squashed
@@ -622,7 +584,7 @@ squash, fixup::
 	the post-image of `HEAD` first. A line that the later commit
 	rewrote gets the actors of both. The lines of a commit without a
 	line record are `UNKNOWN`, and those of the other keep their
-	marks. Sessions are listed once and summaries concatenated.
+	marks.
 
 revert::
 	The sides swap: the lines the revert deletes get the marks of
@@ -635,8 +597,7 @@ revert::
 	line record, or whose range is `UNKNOWN`, is `UNKNOWN`; a human
 	of that record is the human of the revert. This costs one blame
 	per file the source changes, which is acceptable as reverts are
-	rare. Reasoning comes from the journal only, as the source's
-	reasoning explains the change, not its revert.
+	rare.
 
 A rewrite writes a record even if none of its sources has one: the
 lines it takes from them are `UNKNOWN`, and the lines it adds itself,
@@ -678,15 +639,13 @@ source restores the lines that a blame of its parent finds, as above.
 `REVERT_HEAD` is a source only if the file names no revert, as after a
 `git revert` that stopped on a conflict, so that no reverted commit is
 a source twice. Every commit that consumes the journal, unless it is
-partial, removes the file with it. As the user may have discarded a
-pick or a revert before committing, such a source is tentative: the
-reasoning of a pick is attached only if a line of the commit takes its
-owners from it, as for `adopt`, and a discarded revert restores no
-line of the commit. `git
-merge --squash`, which makes no commit either, appends the commits it
-squashes to the same file, oldest first, so that the commit that
-concludes it carries their records as after a `cherry-pick
---no-commit` of each.
+partial, removes the file with it. The user may have discarded a pick
+or a revert before committing: as the changes of a source are found in
+the new commit, a discarded pick lends no line to the commit, and a
+discarded revert restores none. `git merge --squash`, which makes no
+commit either, appends the commits it squashes to the same file,
+oldest first, so that the commit that concludes it carries their
+records as after a `cherry-pick --no-commit` of each.
 
 Merges recreated by `rebase --rebase-merges` are made by a child `git
 commit` with `MERGE_HEAD`, so they record what they resolve, as any
@@ -707,14 +666,14 @@ as a conflict resolution may have changed its lines, and otherwise go
 to the fallback owner, the human or the stamps of the journal. A mail
 without a block, as from stock Git, makes every line the commit
 changes `UNKNOWN`, as a pick of a commit without a record does. The
-`commit` line of the mailed record is only informational, `capture`
-follows the rules of rewrites, and no reasoning record comes with the
-mail. `am` keeps the record in `rebase-apply/provenance` until the
-commit is made, so that `am --continue` has it, writes the records
-in the ref transaction that moves `HEAD`, and consumes the journal; as
-for picks, `provenance.require` does not refuse the commit and no
-advice is given. `am --rebasing`, for `rebase --apply`, keeps taking
-the records of `rebase-apply/original-commit`.
+`commit` line of the mailed record is only informational, and
+`capture` follows the rules of rewrites. `am` keeps the record in
+`rebase-apply/provenance` until the commit is made, so that `am
+--continue` has it, writes the records in the ref transaction that
+moves `HEAD`, and consumes the journal; as for picks,
+`provenance.require` does not refuse the commit and no advice is
+given. `am --rebasing`, for `rebase --apply`, keeps taking the records
+of `rebase-apply/original-commit`.
 
 Not covered yet: `git replay` and `git history`. Rewrites by tools
 that do not know the extension leave commits without records, which
@@ -755,10 +714,6 @@ repairs them, oldest first:
    only if a source record marks it so, and its human is then the
    author of the commit.
 
-4. The reasoning record collects the sessions and summaries of the
-   sources that some line of the commit was taken from, in the same
-   order.
-
 The resulting record is marked `adopted`. If no source accounts for
 any line, nothing is written: an all-`UNKNOWN` record would only stand
 in the way of adopting the commit once its sources have been fetched.
@@ -774,8 +729,8 @@ Only the importing side knows which old commit each new one replaces:
 the marks files that `fast-export --export-marks` and `fast-import
 --export-marks` write give each commit of the stream the same mark,
 and joining them yields the map. `git provenance remap` reads that map
-as pairs of old and new ids and carries the records over, pair by
-pair:
+as pairs of old and new ids and carries the line records over, pair
+by pair:
 
 1. A line record that `verify` accepts for the new commit is moved as
    it is, with its `commit` line rewritten. This is the common case,
@@ -788,65 +743,59 @@ pair:
    lines that no located range covers are `UNKNOWN`, as for `adopt`,
    since nothing observed them, and the record is marked `adopted`.
 
-3. The reasoning record is moved as it is, with its `commit` line
-   rewritten.
-
 A pair whose new id is not a commit, or whose new commit has a line
 record already, is skipped with a warning; `prune` removes the
 records left behind once their commits are gone. The old keys are
 removed, and all the moves of a run are written as one notes commit
-on top of each provenance ref, in one ref transaction: this is
-ordinary history of the refs, not a rewrite as `purge` makes.
+on top of `refs/provenance/lines`: this is ordinary history of the
+ref, not a rewrite.
 
 Transfer
 ~~~~~~~~
-The provenance refs of a remote are fetched into tracking refs, as
+The provenance ref of a remote is fetched into a tracking ref, as
 branches are fetched into remote-tracking branches:
 `refs/provenance/lines` of the remote `origin` lands in
-`refs/provenance/remotes/origin/lines`, and likewise for
-`refs/provenance/reasoning`. They are not under `refs/remotes/origin/`,
-where they would show up as remote branches.
+`refs/provenance/remotes/origin/lines`. It is not under
+`refs/remotes/origin/`, where it would show up as a remote branch.
 
-The refspecs are implicit. `fetch` from a configured remote (and so
+The refspec is implicit. `fetch` from a configured remote (and so
 `pull`, `fetch --all` and `remote update`) adds
 
 ....
 +refs/provenance/lines:refs/provenance/remotes/<name>/lines
-+refs/provenance/reasoning:refs/provenance/remotes/<name>/reasoning
 ....
 
 to the refspecs it uses, whether they come from the configuration or
-from the command line, and `clone` adds them to its initial fetch.
+from the command line, and `clone` adds it to its initial fetch.
 Nothing is written to `remote.<name>.fetch`, so existing clones need
 no conversion and `provenance.enabled=false` turns transfer off
 entirely. `remote.<name>.provenance=false` turns it off for one
 remote: `fetch`, `pull`, `clone`, `remote update` and `push` add
-nothing for it, so its provenance refs are neither fetched, merged nor
-pushed, while refspecs that name them explicitly are used as given.
-Both checks live in the functions that make the implicit refspecs, so
-every caller inherits them. A remote without provenance refs is not
-an error; the refs are not written to `FETCH_HEAD`; `--prune` prunes
-their tracking refs. Nothing is added for a URL, for `--prefetch`, for
-`clone --revision`, which fetches the history of one revision and
-makes no other refs, for a fetch whose refspecs only name object ids
-and store them in no ref (the lazy fetch of a partial clone, which
-must not move refs under a command that only wanted an object), or for
-a provenance ref that the refspecs already map, which covers the
-`+refs/*:refs/*` of `clone --mirror`.
+nothing for it, so its provenance ref is neither fetched, merged nor
+pushed, while refspecs that name it explicitly are used as given. Both
+checks live in the functions that make the implicit refspecs, so every
+caller inherits them. A remote without a provenance ref is not an
+error; the ref is not written to `FETCH_HEAD`; `--prune` prunes its
+tracking ref. Nothing is added for a URL, for `--prefetch`, for `clone
+--revision`, which fetches the history of one revision and makes no
+other refs, for a fetch whose refspecs only name object ids and store
+them in no ref (the lazy fetch of a partial clone, which must not move
+refs under a command that only wanted an object), or for a provenance
+ref that the refspecs already map, which covers the `+refs/*:refs/*`
+of `clone --mirror`.
 
 The tracking refs belong to their remote as its remote-tracking
 branches do, and `git remote` maintains them alike. `remote remove`
-deletes `refs/provenance/remotes/<name>/<kind>` with the other refs of
-the remote, and `remote rename` renames them with their reflogs in
-the same ref transaction as `refs/remotes/<old>/*`, also when the
-fetch refspecs are not the default ones. Both leave alone the refs of
-a remote whose name starts with `<name>/`. `remote prune` adds the
-implicit refspecs to those whose stale refs it looks for, as
-`fetch --prune` does, so it prunes a tracking ref whose provenance
-ref the remote no longer has, and `remote show` lists such a ref as
-stale; `remote update --prune` runs `fetch --prune`. A remote that
-opted out has no implicit refspecs, so its tracking refs are not
-pruned.
+deletes the refs under `refs/provenance/remotes/<name>/` with the
+other refs of the remote, and `remote rename` renames them with their
+reflogs in the same ref transaction as `refs/remotes/<old>/*`, also
+when the fetch refspecs are not the default ones. Both leave alone the
+refs of a remote whose name starts with `<name>/`. `remote prune` adds
+the implicit refspecs to those whose stale refs it looks for, as
+`fetch --prune` does, so it prunes a tracking ref whose provenance ref
+the remote no longer has, and `remote show` lists such a ref as stale;
+`remote update --prune` runs `fetch --prune`. A remote that opted out
+has no implicit refspecs, so its tracking refs are not pruned.
 
 After a fetch that updated a tracking ref, the tracking ref is merged
 into the local ref, through a ref transaction:
@@ -869,49 +818,50 @@ into the local ref, through a ref transaction:
    would do, because the result would not parse.
 
 4. If the two sides share no history, one of them may have rewritten
-   it, as `provenance purge` does. The value T that the tracking ref
-   had before the fetch is the last state both sides agreed on (for
-   the retry of a push, the value before the retry's fetch). If T is
-   in the history of the fetched commit only, the local history was
-   rewritten: the tree is a three-way merge against T, and the commit
-   has the local commit as its only parent, so the purged records do
-   not come back and those the remote added since T do. If T is in
-   the history of the local ref only, the remote history was
-   rewritten: the same merge has the fetched commit as its only
-   parent, or the local ref takes the fetched commit if it is still
-   at T, so the local records added since T are kept and the result
-   fast-forwards the remote without bringing the old history back.
-   Otherwise, as in a shallow clone or with no tracking ref yet, the
-   merge is a union with the rule of 3. The reflog message names the
-   case: `fetch: merge provenance from <name> (rewritten locally)`,
-   or `(rewritten on <name>)`.
+   it, as when records are removed by replacing the ref with a commit
+   without a parent. The value T that the tracking ref had before the
+   fetch is the last state both sides agreed on (for the retry of a
+   push, the value before the retry's fetch). If T is in the history
+   of the fetched commit only, the local history was rewritten: the
+   tree is a three-way merge against T, and the commit has the local
+   commit as its only parent, so the removed records do not come back
+   and those the remote added since T do. If T is in the history of
+   the local ref only, the remote history was rewritten: the same
+   merge has the fetched commit as its only parent, or the local ref
+   takes the fetched commit if it is still at T, so the local records
+   added since T are kept and the result fast-forwards the remote
+   without bringing the old history back. Otherwise, as in a shallow
+   clone or with no tracking ref yet, the merge is a union with the
+   rule of 3. The reflog message names the case: `fetch: merge
+   provenance from <name> (rewritten locally)`, or `(rewritten on
+   <name>)`.
 
 The merge is written on top of `notes.c` in `provenance-transfer.c`
 rather than through `notes_merge()`, whose `ours` strategy resolves
 conflicts without reporting them and which prints its progress to
 standard output.
 
-`push` to a configured remote pushes the local provenance refs in the
+`push` to a configured remote pushes the local provenance ref in the
 same push as the branches, when it pushes at least one branch and the
-local refs exist: not for a URL, `--mirror` (which pushes them
+local ref exists: not for a URL, `--mirror` (which pushes it
 anyway), `--delete`, `--prune` or `--tags` alone. A branch is a ref
 under `refs/heads/` on the remote: a push to `refs/for/<branch>` of a
 review system, or to any other namespace, adds nothing. A destination
 that is not a full ref name counts as a branch when the source is a
-local branch, as `push` resolves it. They are forced only
-with `--force`. If the remote rejects a provenance ref because it
-moved, `push` runs `git fetch` for the rejected refs, which merges
-them as above, and pushes the provenance refs once more; if that is
-rejected too because the remote moved again, the push fails with a
-hint to run `git fetch <name>`. After a local rewrite the second push
-is rejected as well, as the merge keeps the rewrite; when the tracking
-ref is not in the history of the local ref, the hint says that the
-history was rewritten locally and names `git push --force <name>
-<ref>` instead. Both hints are gated by `advice.pushUpdateRejected`.
+local branch, as `push` resolves it. It is forced only with `--force`.
+If the remote rejects the provenance ref because it moved, `push` runs
+`git fetch` for it, which merges it as above, and pushes the
+provenance ref once more; if that is rejected too because the remote
+moved again, the push fails with a hint to run `git fetch <name>`.
+After a local rewrite the second push is rejected as well, as the
+merge keeps the rewrite; when the tracking ref is not in the history
+of the local ref, the hint says that the history was rewritten locally
+and names `git push --force <name> <ref>` instead. Both hints are
+gated by `advice.pushUpdateRejected`.
 
 A provenance ref that the push updated on the remote, whether added
 on its own or named in the refspecs, sets its tracking ref
-`refs/provenance/remotes/<name>/<kind>` to the pushed value, with the
+`refs/provenance/remotes/<name>/lines` to the pushed value, with the
 reflog message `update by push`, as a pushed branch sets its
 remote-tracking branch. `transport_update_tracking_ref()` only sees
 `remote.<name>.fetch`, which does not hold the implicit refspecs, so
@@ -919,31 +869,24 @@ remote-tracking branch. `transport_update_tracking_ref()` only sees
 tracking ref up to date and has nothing to merge. `--dry-run` changes
 nothing, and a remote that opted out keeps no tracking refs.
 
-A remote may refuse the provenance refs for another reason: a hook
+A remote may refuse the provenance ref for another reason: a hook
 that accepts only branches, or a hosting service that does not allow
 other namespaces. The branches the user asked for are what the push
 is about, so when every ref the user named was pushed and only the
-provenance refs that the push added on its own were refused, the push
-succeeds. The rejected lines are printed as for any ref, followed by
-one warning that names the refused refs with the remote's reason and
-a hint that `remote.<name>.provenance=false` stops pushing them. A
+provenance ref that the push added on its own was refused, the push
+succeeds. The rejected line is printed as for any ref, followed by
+one warning that names the refused ref with the remote's reason and
+a hint that `remote.<name>.provenance=false` stops pushing it. A
 provenance ref that the refspecs name fails the push as any ref does,
 and `--atomic` keeps its all-or-nothing semantics: the remote refuses
 everything, and the push fails.
 
-Stock Git users can fetch the refs with an explicit refspec, and stock
+Stock Git users can fetch the ref with an explicit refspec, and stock
 servers and hosting services need nothing: nothing on the wire
 changes.
 
-`provenance.reasoning.fetch` and `provenance.reasoning.push` take
-`always` (the default) or `never`. A third value, `ondemand`
-(structure now, blobs lazily through partial clone), is reserved: it
-needs partial-clone support for reasoning blobs and is rejected until
-then. Size is controlled where the data is written, by
-`provenance.reasoning.transcripts`.
-
 Shallow clones, bundles and partial clones need no changes to carry
-the refs; a partial-clone filter treats reasoning blobs as any other
+the ref; a partial-clone filter treats record blobs as any other
 blob.
 
 Maintenance
@@ -953,44 +896,38 @@ Maintenance
   or that an import replaced under ids that `remap` was not given,
   stay keyed by ids that name no object. `provenance prune` removes
   them, deciding as `git notes prune` does: a commit that exists but
-  is unreachable keeps its records. It writes one notes commit on top
-  of each ref, in one ref transaction, as `remap` does.
+  is unreachable keeps its record. It writes one notes commit on top
+  of the ref, as `remap` does.
 
 - `provenance verify` is the `fsck` of provenance.
 
-- `provenance purge` rewrites `refs/provenance/reasoning` to remove
-  records, sessions or matches of a pattern (see "Privacy"); after it,
-  `gc` drops the purged blobs once nothing else reaches them.
-
-- `fast-export` and `fast-import` carry the provenance refs as the
-  notes refs they are, as ordinary commits: `fast-export --all`, or
-  an export that names the refs, imported into a new repository
-  reproduces them byte for byte, and the records verify there.
-  `fast-export` adds nothing implicitly, so an export of a branch
-  alone carries no records. The records are keyed by commit id, so
-  they only describe the imported commits if the stream keeps the
-  ids: an import that changes them, as with `--reencode=yes` or an
-  edited stream (`filter-repo`), leaves the records attached to the
-  old ids, where no commit uses them. `git provenance remap` carries
-  them over along the map that the marks files of the export and of
-  the import give (see "Re-anchoring"), and `provenance prune` removes
-  those of the commits that are gone. The notes
-  commits of the provenance refs carry an `encoding` header when
-  `i18n.commitEncoding` is set, as those of `git notes` do, so
-  `fast-export` needs `--reencode` for them as for the other commits.
+- `fast-export` and `fast-import` carry the provenance ref as the
+  notes ref it is, as ordinary commits: `fast-export --all`, or an
+  export that names the ref, imported into a new repository reproduces
+  it byte for byte, and the records verify there. `fast-export` adds
+  nothing implicitly, so an export of a branch alone carries no
+  records. The records are keyed by commit id, so they only describe
+  the imported commits if the stream keeps the ids: an import that
+  changes them, as with `--reencode=yes` or an edited stream
+  (`filter-repo`), leaves the records attached to the old ids, where
+  no commit uses them. `git provenance remap` carries them over along
+  the map that the marks files of the export and of the import give
+  (see "Re-anchoring"), and `provenance prune` removes those of the
+  commits that are gone. The notes commits of the provenance ref carry
+  an `encoding` header when `i18n.commitEncoding` is set, as those of
+  `git notes` do, so `fast-export` needs `--reencode` for them as for
+  the other commits.
 
 - `format-patch` adds the line record of each commit to its mail, in a
   `Provenance:` block after the `---` separator, where the notes of
   `--notes` go and where stock `git am` and `git apply` ignore it (see
   the format document); `am` records it for the commit it makes (see
-  "History rewriting"). It is on by default, with
-  `format.provenance`, which defaults to `provenance.enabled`, and
-  `--[no-]provenance`. The record keeps the `file` blocks of the
-  paths that the patch shows, and there is no block when none is
-  left, as for an empty commit, nor in the cover letter. The reasoning
-  record is not mailed: it may be large or private, and a mail is a
-  copy that cannot be purged. `log` and `show` keep their
-  `--provenance` column and never print the block.
+  "History rewriting"). It is on by default, with `format.provenance`,
+  which defaults to `provenance.enabled`, and `--[no-]provenance`. The
+  record keeps the `file` blocks of the paths that the patch shows,
+  and there is no block when none is left, as for an empty commit, nor
+  in the cover letter. `log` and `show` keep their `--provenance`
+  column and never print the block.
 
 Migration and Interoperability
 ------------------------------
@@ -1042,7 +979,7 @@ of `format-patch` with what stock Git writes and see the
 `ci/run-build-and-tests.sh`; the upstream test scripts are not
 changed. A failure for any other reason is a bug
 in the extension and is fixed, with a test in the provenance scripts
-(t3312 to t3319, t3322 and t3323), which run in both kinds of jobs.
+(t3312 to t3319 and t3323 to t3325), which run in both kinds of jobs.
 
 Integrity
 ---------
@@ -1053,9 +990,9 @@ hosting services. The extension does the same for provenance:
 - Records are not part of a commit's identity. No commitments,
   trailers or headers are added to commits.
 
-- The provenance refs have their own history, so the controls applied
-  to code apply to them: protect the refs, require signed pushes, keep
-  the audit trail through the ref's history.
+- The provenance ref has its own history, so the controls applied to
+  code apply to it: protect the ref, require signed pushes, keep the
+  audit trail through the ref's history.
 
 - `provenance verify` detects records that drifted from their
   commits.
@@ -1065,47 +1002,19 @@ the extension can prove that a human typed a line marked `HUMAN`.
 
 Privacy
 -------
-Like Git itself, the extension has no built-in secret scanning, and
-redacts nothing on its own. Scanning and push protection are
-hosting-service and pre-commit features, and they apply unchanged
-because reasoning is pushed as ordinary blobs under an ordinary ref.
+Line records hold marks, session ids, and model and tool names, but no
+free text written by an agent. Like Git itself, the extension has no
+built-in secret scanning, and redacts nothing on its own. Scanning and
+push protection are hosting-service and pre-commit features, and they
+apply unchanged because records are pushed as ordinary blobs under an
+ordinary ref.
 
-What the extension guarantees is that reasoning is separable, so
-those tools, and the user, have something to act on without touching
-code history:
-
-- Reasoning lives under `refs/provenance/reasoning`, not in the
-  commit. Rewriting or deleting that ref's history changes no commit
-  id.
-
-- `git provenance purge` rewrites only that ref. Given commits, it
-  removes their records; with `--session <id>`, it drops the session
-  and the summary it may have written from every record that names
-  it, and removes a record left without a session; with `--redact
-  <pattern>` (`-E`, `-F`, `-i` as for `log --grep`), it replaces each
-  match in the summaries with `***REMOVED***`, the marker of `git
-  filter-repo --replace-text`, and never touches the header. The
-  records that are left are written as one notes commit without a
-  parent, so the purged blobs, and the history that held them, are
-  no longer reachable from the ref. Line records hold no free text
-  and are not rewritten.
-
-- Old blobs then go away by the usual route: `git push --force
-  <remote> refs/provenance/reasoning` replaces the one ref, the
-  host's `gc` drops them there, and `reflog expire` and `gc
-  --prune=now` drop the local copies. The merge on fetch tells a
-  rewrite from a divergence through the tracking ref (see
-  "Transfer"), so the purge survives later fetches and pushes on
-  every clone that fetches it; a clone that force-pushes the ref
-  without fetching first brings the records back, as with any
-  rewritten history.
-
-- `refs/provenance/reasoning` can be pushed to a different remote than
-  the code, or not pushed at all.
+- Records live under `refs/provenance/lines`, not in the commit.
+  Rewriting or deleting that ref's history changes no commit id.
 
 - The standard hooks apply: `pre-commit` and `commit-msg` on the
   client, `pre-receive` and `update` on the server. Git pushes the
-  code ref and the provenance refs in one push, so a server-side hook
+  code ref and the provenance ref in one push, so a server-side hook
   sees both and can reject both.
 
 Performance
@@ -1139,9 +1048,7 @@ Performance
   under a lock at the end of a run, and rebuilt by deleting it; a
   failure to write it is a warning.
 
-- Size: line records are a few hundred bytes per commit. Transcripts
-  dominate, which is why they are optional, separate and lazily
-  fetchable.
+- Size: line records are a few hundred bytes per commit.
 
 Alternatives Considered
 -----------------------
@@ -1159,14 +1066,14 @@ A new commit header pointing at a provenance tree::
 	does not follow the pointer: it does not transfer the tree, does
 	not keep it alive and does not verify it, so a stock `gc` or a
 	push through a stock server silently drops the data. The pointer
-	is part of the commit id, so correcting or purging provenance
+	is part of the commit id, so correcting or removing provenance
 	rewrites history, and stock `rebase` drops the header. Guarding
 	this with a repository format extension would make every stock
 	Git refuse to open the repository. Rejected as storage.
 
 Commit message trailers::
-	Survive rewrites but clutter every message, cannot hold line
-	maps, and make reasoning unredactable. Rejected.
+	Survive rewrites but clutter every message and cannot hold line
+	maps. Rejected.
 
 Files committed with the code::
 	Survive everything, including a host's squash merge, but add

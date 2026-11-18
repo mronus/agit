@@ -391,14 +391,14 @@ PROVENANCE
 ----------
 
 If provenance is enabled (see `provenance.enabled` in
-linkgit:git-config[1]), the clone also fetches the provenance refs of
-the remote into `refs/provenance/remotes/<name>/` and creates the
-local `refs/provenance/lines` and `refs/provenance/reasoning` from
-them, as linkgit:git-fetch[1] does (see its PROVENANCE section); no
-refspec is written to the configuration for them.  With `--mirror`,
-the provenance refs are copied as they are, like every other ref.
-With `-c remote.<name>.provenance=false`, they are not fetched, and
-the setting stays in the configuration of the new repository.
+linkgit:git-config[1]), the clone also fetches the provenance ref of
+the remote into `refs/provenance/remotes/<name>/lines` and creates the
+local `refs/provenance/lines` from it, as linkgit:git-fetch[1] does
+(see its PROVENANCE section); no refspec is written to the
+configuration for it.  With `--mirror`, the provenance ref is copied
+as it is, like every other ref.  With `-c
+remote.<name>.provenance=false`, it is not fetched, and the setting
+stays in the configuration of the new repository.
 
 EXAMPLES
 --------

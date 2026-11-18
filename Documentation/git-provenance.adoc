@@ -9,14 +9,10 @@ git-provenance - Show, verify, maintain and sum AI provenance of commits
 SYNOPSIS
 --------
 [synopsis]
-git provenance show [--reasoning] <commit>
+git provenance show <commit>
 git provenance verify [<commit>...]
 git provenance adopt [--from <rev>]... [-f | --force] <revision-range>...
 git provenance remap [--dry-run] [<file>]
-git provenance purge [--dry-run] <revision-range>...
-git provenance purge [--dry-run] --session <id>... [<revision-range>...]
-git provenance purge [--dry-run] [-E | -F] [-i] --redact <pattern>
-		     [<revision-range>...]
 git provenance prune [--dry-run]
 git provenance stat [--porcelain] [--no-cache] [<revision-range>...]
 
@@ -25,14 +21,12 @@ DESCRIPTION
 
 Provenance records describe how the changes of a commit were made: a
 line record says which added and removed lines were written by an AI
-agent, by a human, or by both, and a reasoning record says why the
-commit was made.  Records are stored as notes under
-`refs/provenance/lines` and `refs/provenance/reasoning`, keyed by the
-commit they describe, so a commit can carry provenance without its
-object id changing.  See
+agent, by a human, or by both.  Records are stored as notes under
+`refs/provenance/lines`, keyed by the commit they describe, so a
+commit can carry provenance without its object id changing.  See
 `Documentation/technical/git-provenance-format.adoc` for the record
-formats.  linkgit:git-commit[1] writes the records of each commit it
-makes, and `git commit --amend`, linkgit:git-cherry-pick[1],
+format.  linkgit:git-commit[1] writes the line record of each commit
+it makes, and `git commit --amend`, linkgit:git-cherry-pick[1],
 linkgit:git-revert[1] and linkgit:git-rebase[1] carry the records of
 the commits they rewrite over to the commits they make (see their
 PROVENANCE sections).
@@ -40,17 +34,16 @@ PROVENANCE sections).
 This command reads and checks records, gives records to commits made
 without them from the records of the commits they were made from
 (`adopt`), carries records over to the commits that replace theirs
-under other object ids (`remap`), removes what reasoning records must
-not hold (`purge`) and the records of commits that are gone
-(`prune`), and sums the line records of a range of history (`stat`).  See
+under other object ids (`remap`), removes the records of commits that
+are gone (`prune`), and sums the line records of a range of history
+(`stat`).  See
 linkgit:git-notes[1] for a way to attach a record by hand.
 
 COMMANDS
 --------
 
-`show [--reasoning] <commit>`::
+`show <commit>`::
 	Print the line record attached to _<commit>_ as it is stored.
-	With `--reasoning`, print the reasoning record instead.
 
 `verify [<commit>...]`::
 	Check the line record attached to each _<commit>_ (`HEAD` if
@@ -87,9 +80,7 @@ first, that has the same line among the changes its record covers; a
 line that rewrites such a line, or that no source accounts for, is
 `UNKNOWN`.  A line is never guessed to be `HUMAN`: it is `HUMAN` only
 if a source record marks it so, and its human is then the author of
-the commit.  The reasoning record collects the sessions and summaries
-of the sources that some line was taken from, and the line record is
-marked `capture adopted`.  Nothing is written for a commit that no
+the commit.  The line record is marked `capture adopted`.  Nothing is written for a commit that no
 source accounts for, so that it can be adopted once its sources have
 been fetched.
 
@@ -115,15 +106,13 @@ as linkgit:git-am[1] records the line record of a patch mail: each of
 its ranges is looked for by its anchor among the lines that the new
 commit changes, the lines of the new commit that no range found
 accounts for are `UNKNOWN`, and the record is marked
-`capture adopted`.  The reasoning record is moved as it is, with its
-`commit` line rewritten.  A pair is skipped if the new object id does
+`capture adopted`.  A pair is skipped if the new object id does
 not name a commit, if the new commit has a line record already, or
-if a record of the old commit cannot be parsed.  A pair whose two ids
+if the record of the old commit cannot be parsed.  A pair whose two ids
 are the same is ignored.
 +
-The records that move are written as one new commit on top of each
-provenance ref that changes, and both refs are updated together;
-nothing is written if no record moves.  The map of the old object ids
+The records that move are written as one new commit on top of
+`refs/provenance/lines`; nothing is written if no record moves.  The map of the old object ids
 to the new ones is found by joining the marks files that the export
 and the import write, which give each commit of the stream the same
 mark.  Here a stream is edited and imported into a new repository,
@@ -143,65 +132,16 @@ The pairs of the blobs of the stream, and of the commits whose ids
 did not change, are ignored.  The records that are not carried over
 stay keyed by the old ids, where `prune` removes them.
 
-`purge [--dry-run] <revision-range>...`::
-`purge [--dry-run] --session <id>... [<revision-range>...]`::
-`purge [--dry-run] [-E | -F] [-i] --redact <pattern> [<revision-range>...]`::
-	Remove from the reasoning records what they must not hold, such
-	as a secret that an AI session wrote into a summary.  Only
-	`refs/provenance/reasoning` is rewritten.  Line records are left
-	alone: they hold marks, session ids, and model and tool names,
-	but no free text.  Commits are named as for `adopt`.
-+
---
-_<revision-range>_ alone;;
-	Remove the reasoning records of the commits.
-`--session <id>`;;
-	Drop the `session` line of _<id>_ from each reasoning record that
-	has one, or from those of the given commits.  The summary of such
-	a record is dropped as well, as it cannot be told which session
-	wrote what, and a record left without a `session` line is removed,
-	as it would state that no AI was involved.  Can be given more
-	than once.
-`--redact <pattern>`;;
-	Replace each match of _<pattern>_ in the summary of each
-	reasoning record, or of those of the given commits, with
-	`***REMOVED***`.  The `version`, `commit` and `session` lines are
-	never changed.
---
-+
-A record that none of these changes is kept as it is, as is a record
-that cannot be parsed, with a warning.  One line is printed per record
-that is changed: `<object-id> removed`, `<object-id> redacted <n>`
-with the number of matches replaced, or `<object-id> session
-dropped`, where _<object-id>_ names the commit of the record.
-+
-The records that are left are written as one new commit of
-`refs/provenance/reasoning` without a parent, so that neither the
-purged records nor the history of the ref that held them can be
-reached from it any more; nothing is written if no record is changed.
-The old records still exist until they are dropped: replace the ref
-of the remote with `git push --force <remote>
-refs/provenance/reasoning`, which also updates its tracking ref (see
-linkgit:git-push[1]), and then run `git reflog expire --expire=now
-refs/provenance/reasoning` and `git gc --prune=now` in this
-repository.  Other clones take the rewrite with their next fetch,
-which keeps the records they added since (see linkgit:git-fetch[1]).
-A clone that pushes its own `refs/provenance/reasoning` with `--force`
-without fetching first brings the purged records back, as it would
-for any rewritten history; so does a copy made by other means, such
-as a mail or a backup.
-
 `prune [--dry-run]`::
-	Remove the line and reasoning records of the commits that are
-	not objects of the repository, as linkgit:git-notes[1] `prune`
-	removes notes: a commit that exists but that no ref reaches
-	keeps its records.  Such records are left by an import that
-	changed the ids of commits, for the pairs that `remap` could
-	not carry over, or by a commit dropped from history once `gc`
-	has removed it.  One line is printed per commit whose records
-	are removed: `<object-id> pruned`.  The records that are left
-	are written as one new commit on top of each provenance ref
-	that changes, and both refs are updated together; nothing is
+	Remove the line records of the commits that are not objects of
+	the repository, as linkgit:git-notes[1] `prune` removes notes:
+	a commit that exists but that no ref reaches keeps its record.
+	Such records are left by an import that changed the ids of
+	commits, for the pairs that `remap` could not carry over, or by
+	a commit dropped from history once `gc` has removed it.  One
+	line is printed per commit whose record is removed:
+	`<object-id> pruned`.  The records that are left are written as
+	one new commit on top of `refs/provenance/lines`; nothing is
 	written if no record is removed.
 
 `stat [--porcelain] [--no-cache] [<revision-range>...]`::
@@ -210,7 +150,7 @@ as a mail or a backup.
 	of the added lines that are `AI` or `MIXED`.  The commits are
 	walked as linkgit:git-log[1] walks them: without a range, the
 	history of `HEAD`; a single commit names its history, not that
-	commit alone as for `adopt` and `purge` (`<commit>^!` names one
+	commit alone as for `adopt` (`<commit>^!` names one
 	commit).  Options that limit the walk, such as `--since` or
 	`--author`, are taken as `git log` takes them; paths are not.
 +
@@ -243,9 +183,6 @@ it again.  See
 OPTIONS
 -------
 
-`--reasoning`::
-	Show the reasoning record instead of the line record.
-
 `--from <rev>`::
 	With `adopt`, only take records from commits that _<rev>_ can
 	reach, such as the branch that was squashed.  Can be given more
@@ -253,10 +190,9 @@ OPTIONS
 
 `-f`::
 `--force`::
-	With `adopt`, replace the records of commits whose line record
-	was adopted.  Both records are replaced: a commit adopted again
-	from sources that name no session keeps no reasoning record.
-	Records that were observed or declared are never replaced.
+	With `adopt`, replace the line records of commits whose line
+	record was adopted.  Records that were observed or declared are
+	never replaced.
 
 `--porcelain`::
 	With `stat`, print one `<key> <value>` line per count, in a form
@@ -272,31 +208,8 @@ OPTIONS
 
 `-n`::
 `--dry-run`::
-	With `remap`, `purge` and `prune`, print what would be done,
+	With `remap` and `prune`, print what would be done,
 	without writing anything.
-
-`--session <id>`::
-	With `purge`, drop the session _<id>_ from the reasoning
-	records.
-
-`--redact <pattern>`::
-	With `purge`, replace the matches of _<pattern>_ in the summaries
-	of the reasoning records.  _<pattern>_ is a basic regular
-	expression, as `git log --grep` takes it, and matches within a
-	line.
-
-`-E`::
-`--extended-regexp`::
-	With `--redact`, _<pattern>_ is an extended regular expression.
-
-`-F`::
-`--fixed-strings`::
-	With `--redact`, _<pattern>_ is a fixed string, such as a leaked
-	key, whose characters have no special meaning.
-
-`-i`::
-`--regexp-ignore-case`::
-	With `--redact`, match _<pattern>_ ignoring case.
 
 EXIT STATUS
 -----------
@@ -310,11 +223,11 @@ is found is not a failure.  `remap` exits with status 0 unless an
 error occurred, such as a line of its input that is not a pair of
 object ids, which is reported with its number, or records that could
 not be read or written; a pair that is skipped is not a failure, and
-nothing is written after an error.  `purge` and `prune` exit with
-status 0 unless an error occurred, also when there is nothing to
-remove.  `stat` exits with status 0 unless the line records cannot be
-read; a commit without a record, or with one that does not parse, is
-not a failure.  All of them exit with status 128 if an argument is
+nothing is written after an error.  `prune` exits with status 0
+unless an error occurred, also when there is nothing to remove.
+`stat` exits with status 0 unless the line records cannot be read; a
+commit without a record, or with one that does not parse, is not a
+failure.  All of them exit with status 128 if an argument is
 not a commit.
 
 SEE ALSO
@@ -323,8 +236,8 @@ Other commands show provenance records as well: `git diff`, `git show`
 and `git log -p` mark each line of a patch with `--provenance` (see
 linkgit:git-diff[1]), `git blame --provenance` marks each line of a
 file (see linkgit:git-blame[1]), and the `%(provenance:<field>)`
-placeholders of the pretty formats show the summary, the AI share,
-the models and the sessions of a commit (see linkgit:git-log[1]).
+placeholders of the pretty formats show the AI share, the models and
+the sessions of a commit (see linkgit:git-log[1]).
 
 `git fetch`, `git pull`, `git clone` and `git push` transfer the
 records along with the branches and merge the records of a remote

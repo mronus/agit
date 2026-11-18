@@ -379,7 +379,7 @@ static void advise_provenance_rejected(const char *remote_name)
 
 static const char message_advice_provenance_rewritten[] =
 	N_("The history of '%s' was rewritten locally,\n"
-	   "as 'git provenance purge' does. To replace the history of the remote\n"
+	   "leaving out that of the remote. To replace the history of the remote\n"
 	   "with it, use 'git push --force %s %s'.");
 
 static void advise_provenance_rewritten(const char *remote_name,

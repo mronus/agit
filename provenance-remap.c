@@ -19,7 +19,7 @@
 #include "repository.h"
 #include "strbuf.h"
 
-/* A provenance ref, with the notes tree of the commit it points to. */
+/* The provenance ref, with the notes tree of the commit it points to. */
 struct records_ref {
 	const char *name;
 	/* the null id if the ref does not exist */
@@ -39,7 +39,7 @@ static void records_ref_init(struct repository *r, struct records_ref *ref,
 		init_notes(&ref->t, name, combine_notes_overwrite,
 			   NOTES_INIT_EMPTY);
 	} else {
-		/* the commit that the update replaces, as "purge" reads it */
+		/* the commit that the update replaces, not the ref */
 		init_notes(&ref->t, oid_to_hex(&ref->old_oid),
 			   combine_notes_overwrite, 0);
 	}
@@ -87,29 +87,22 @@ static int queue_ref(struct repository *r, struct ref_transaction *transaction,
 	return ret;
 }
 
-/* Update the `nr` refs at `refs` that have changed, in one transaction. */
-static int write_refs(struct repository *r, struct records_ref *refs,
-		      size_t nr, const char *msg, const char *reflog_msg)
+/* Update `ref` if it has changed. */
+static int write_ref(struct repository *r, struct records_ref *ref,
+		     const char *msg, const char *reflog_msg)
 {
 	struct ref_transaction *transaction;
 	struct strbuf err = STRBUF_INIT;
-	int changed = 0, ret = 0;
+	int ret = 0;
 
-	for (size_t i = 0; i < nr; i++)
-		changed |= refs[i].changed;
-	if (!changed)
+	if (!ref->changed)
 		return 0;
 
-	transaction =ref_store_transaction_begin(get_main_ref_store(r), 0,
+	transaction = ref_store_transaction_begin(get_main_ref_store(r), 0,
 						  &err);
-	if (!transaction)
-		ret = -1;
-	for (size_t i = 0; !ret && i < nr; i++)
-		ret = queue_ref(r, transaction, &refs[i], msg, reflog_msg,
-				&err);
-	if (!ret)
-		ret = ref_transaction_commit(transaction, &err);
-	if (ret)
+	if (!transaction ||
+	    queue_ref(r, transaction, ref, msg, reflog_msg, &err) ||
+	    ref_transaction_commit(transaction, &err))
 		ret = error("%s", err.buf);
 	ref_transaction_free(transaction);
 	strbuf_release(&err);
@@ -164,7 +157,6 @@ static int reattach(struct repository *r, struct commit *commit,
 {
 	struct provenance_rewrite rw = { 0 };
 	struct provenance_record lines = PROVENANCE_RECORD_INIT;
-	struct provenance_reasoning reasoning = PROVENANCE_REASONING_INIT;
 	const char *buffer = repo_get_commit_buffer(r, commit, NULL);
 	const char *author;
 	char *ident = NULL;
@@ -186,7 +178,7 @@ static int reattach(struct repository *r, struct commit *commit,
 	rw.adopt = 1;
 	if (provenance_commit_records(r, commit->parents,
 				      get_commit_tree_oid(commit), ident,
-				      NULL, &rw, NULL, &lines, &reasoning))
+				      NULL, &rw, NULL, &lines))
 		goto out;
 	oidcpy(&lines.commit, &commit->object.oid);
 	provenance_record_format(&lines, out);
@@ -195,7 +187,6 @@ static int reattach(struct repository *r, struct commit *commit,
 out:
 	repo_unuse_commit_buffer(r, commit, buffer);
 	provenance_record_release(&lines);
-	provenance_reasoning_release(&reasoning);
 	free(ident);
 	return ret;
 }
@@ -237,91 +228,65 @@ static int find_record(struct notes_tree *t, const struct object_id *commit,
 }
 
 static int remap_one(struct repository *r, struct records_ref *lines,
-		     struct records_ref *reasoning, struct provenance_remap *p,
-		     int dry_run)
+		     struct provenance_remap *p, int dry_run)
 {
 	const struct object_id *old_oid = &p->old_oid, *new_oid = &p->new_oid;
 	struct provenance_record rec = PROVENANCE_RECORD_INIT;
-	struct provenance_reasoning why = PROVENANCE_REASONING_INIT;
-	struct strbuf lines_buf = STRBUF_INIT, reasoning_buf = STRBUF_INIT;
-	struct strbuf err = STRBUF_INIT;
-	struct object_id lines_blob, reasoning_blob;
-	int has_lines, has_reasoning;
+	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
+	struct object_id blob;
 	struct commit *commit;
 	int ret = 0;
 
 	p->result = PROVENANCE_REMAP_NONE;
-	if (oideq(old_oid, new_oid))
-		return 0;
-	has_lines = find_record(&lines->t, old_oid, &lines_blob);
-	has_reasoning = find_record(&reasoning->t, old_oid, &reasoning_blob);
-	if (!has_lines && !has_reasoning)
+	if (oideq(old_oid, new_oid) || !find_record(&lines->t, old_oid, &blob))
 		return 0;
 
 	if (odb_read_object_info(r->objects, new_oid, NULL) != OBJ_COMMIT ||
 	    !(commit = lookup_commit(r, new_oid)) ||
 	    repo_parse_commit(r, commit)) {
 		p->result = PROVENANCE_REMAP_NOT_COMMIT;
-		warning(_("not moving the records of %s: %s is not a commit"),
+		warning(_("not moving the record of %s: %s is not a commit"),
 			oid_to_hex(old_oid), oid_to_hex(new_oid));
 		return 0;
 	}
 	if (get_note(&lines->t, new_oid)) {
 		p->result = PROVENANCE_REMAP_HAS_RECORD;
-		warning(_("not moving the records of %s: %s has a line record"),
+		warning(_("not moving the record of %s: %s has a line record"),
 			oid_to_hex(old_oid), oid_to_hex(new_oid));
 		return 0;
 	}
 
-	if ((has_lines && read_record(r, &lines_blob, &lines_buf)) ||
-	    (has_reasoning && read_record(r, &reasoning_blob, &reasoning_buf))) {
+	if (read_record(r, &blob, &buf)) {
 		ret = -1;
 		goto out;
 	}
-	if ((has_lines &&
-	     provenance_record_parse(lines_buf.buf, lines_buf.len,
-				     r->hash_algo, &rec, &err)) ||
-	    (has_reasoning &&
-	     provenance_reasoning_parse(reasoning_buf.buf, reasoning_buf.len,
-					r->hash_algo, &why, &err))) {
+	if (provenance_record_parse(buf.buf, buf.len, r->hash_algo, &rec,
+				    &err)) {
 		p->result = PROVENANCE_REMAP_BAD_RECORD;
-		warning(_("not moving the records of %s: %s"),
+		warning(_("not moving the record of %s: %s"),
 			oid_to_hex(old_oid), err.buf);
 		goto out;
 	}
 
 	p->result = PROVENANCE_REMAP_MOVED;
-	if (has_lines) {
-		oidcpy(&rec.commit, new_oid);
-		if (!provenance_verify(r, commit, &rec, &err)) {
-			set_commit_line(&lines_buf, new_oid);
-		} else {
-			/* the changes differ: find the ranges by content */
-			p->result = PROVENANCE_REMAP_REATTACHED;
-			strbuf_reset(&lines_buf);
-			if (reattach(r, commit, &rec, &lines_buf)) {
-				ret = -1;
-				goto out;
-			}
-		}
-		if (move_record(r, lines, old_oid, new_oid, &lines_buf,
-				&lines_blob, dry_run)) {
+	oidcpy(&rec.commit, new_oid);
+	if (!provenance_verify(r, commit, &rec, &err)) {
+		set_commit_line(&buf, new_oid);
+	} else {
+		/* the changes differ: find the ranges by content */
+		p->result = PROVENANCE_REMAP_REATTACHED;
+		strbuf_reset(&buf);
+		if (reattach(r, commit, &rec, &buf)) {
 			ret = -1;
 			goto out;
 		}
 	}
-	if (has_reasoning) {
-		set_commit_line(&reasoning_buf, new_oid);
-		if (move_record(r, reasoning, old_oid, new_oid, &reasoning_buf,
-				&reasoning_blob, dry_run))
-			ret = -1;
-	}
+	if (move_record(r, lines, old_oid, new_oid, &buf, &blob, dry_run))
+		ret = -1;
 
 out:
 	provenance_record_release(&rec);
-	provenance_reasoning_release(&why);
-	strbuf_release(&lines_buf);
-	strbuf_release(&reasoning_buf);
+	strbuf_release(&buf);
 	strbuf_release(&err);
 	return ret;
 }
@@ -329,20 +294,18 @@ out:
 int provenance_remap(struct repository *r, struct provenance_remap *pairs,
 		     size_t nr, int dry_run)
 {
-	struct records_ref refs[2];
+	struct records_ref lines;
 	int ret = 0;
 
-	records_ref_init(r, &refs[0], PROVENANCE_LINES_REF);
-	records_ref_init(r, &refs[1], PROVENANCE_REASONING_REF);
+	records_ref_init(r, &lines, PROVENANCE_LINES_REF);
 	for (size_t i = 0; !ret && i < nr; i++)
-		ret = remap_one(r, &refs[0], &refs[1], &pairs[i], dry_run);
+		ret = remap_one(r, &lines, &pairs[i], dry_run);
 	if (!ret && !dry_run)
-		ret = write_refs(r, refs, ARRAY_SIZE(refs),
-				 "remap: carry records over to new commits\n",
-				 "remap");
+		ret = write_ref(r, &lines,
+				"remap: carry records over to new commits\n",
+				"remap");
 
-	for (size_t i = 0; i < ARRAY_SIZE(refs); i++)
-		free_notes(&refs[i].t);
+	free_notes(&lines.t);
 	return ret;
 }
 
@@ -368,29 +331,24 @@ static int collect_missing(const struct object_id *commit,
 int provenance_prune(struct repository *r, int dry_run,
 		     struct oid_array *pruned)
 {
-	struct records_ref refs[2];
+	struct records_ref lines;
+	struct oid_array missing = OID_ARRAY_INIT;
+	struct prune_data pd = { .r = r, .missing = &missing };
 	int ret = 0;
 
-	records_ref_init(r, &refs[0], PROVENANCE_LINES_REF);
-	records_ref_init(r, &refs[1], PROVENANCE_REASONING_REF);
-	for (size_t i = 0; i < ARRAY_SIZE(refs); i++) {
-		struct oid_array missing = OID_ARRAY_INIT;
-		struct prune_data pd = { .r = r, .missing = &missing };
-
-		for_each_note(&refs[i].t, 0, collect_missing, &pd);
-		for (size_t j = 0; j < missing.nr; j++) {
-			remove_note(&refs[i].t, missing.oid[j].hash);
-			oid_array_append(pruned, &missing.oid[j]);
-		}
-		refs[i].changed = missing.nr > 0;
-		oid_array_clear(&missing);
+	records_ref_init(r, &lines, PROVENANCE_LINES_REF);
+	for_each_note(&lines.t, 0, collect_missing, &pd);
+	for (size_t i = 0; i < missing.nr; i++) {
+		remove_note(&lines.t, missing.oid[i].hash);
+		oid_array_append(pruned, &missing.oid[i]);
 	}
+	lines.changed = missing.nr > 0;
+	oid_array_clear(&missing);
 	if (!dry_run)
-		ret = write_refs(r, refs, ARRAY_SIZE(refs),
-				 "prune: remove the records of missing commits\n",
-				 "prune");
+		ret = write_ref(r, &lines,
+				"prune: remove the records of missing commits\n",
+				"prune");
 
-	for (size_t i = 0; i < ARRAY_SIZE(refs); i++)
-		free_notes(&refs[i].t);
+	free_notes(&lines.t);
 	return ret;
 }

@@ -2,38 +2,18 @@ provenance.enabled::
 	If true, linkgit:git-commit[1] records provenance for each
 	commit it makes: which lines were written by an AI agent, by a
 	human, or by both, attributed from the stamps that agents make
-	with linkgit:git-stamp[1], and the reasoning of the agent
-	sessions involved.  The records are stored under
-	`refs/provenance/lines` and `refs/provenance/reasoning`.
-	`git commit --amend`, linkgit:git-cherry-pick[1],
-	linkgit:git-revert[1] and linkgit:git-rebase[1] carry the
-	records of the commits they rewrite over to the commits they
-	make, and linkgit:git-am[1] the line records that patches
-	carry.  If false, none of these commands records provenance or
-	reads the journal of stamps, and linkgit:git-fetch[1],
-	linkgit:git-push[1] and linkgit:git-clone[1] do not transfer
-	the provenance refs.  Transfer can be turned off for a single
+	with linkgit:git-stamp[1].  The line records are stored under
+	`refs/provenance/lines`.  `git commit --amend`,
+	linkgit:git-cherry-pick[1], linkgit:git-revert[1] and
+	linkgit:git-rebase[1] carry the line records of the commits they
+	rewrite over to the commits they make, and linkgit:git-am[1] the
+	line records that patches carry.  If false, none of these
+	commands records provenance or reads the journal of stamps, and
+	linkgit:git-fetch[1], linkgit:git-push[1] and
+	linkgit:git-clone[1] do not transfer the provenance ref.  Transfer can be turned off for a single
 	remote with `remote.<name>.provenance`.  It is also the default
 	of `format.provenance`, which makes linkgit:git-format-patch[1]
 	append the line records to the patches.  Defaults to true.
-
-provenance.reasoning.fetch::
-	Whether fetching from a remote, including with
-	linkgit:git-pull[1] and linkgit:git-clone[1], fetches its
-	reasoning records (`refs/provenance/reasoning`) along with its
-	line records.  If `always`, it does; if `never`, only the line
-	records are fetched.  The value `ondemand`, to fetch the
-	structure of the records now and their contents lazily through
-	a partial clone, is reserved and rejected as not supported yet.
-	Defaults to `always`.  See the PROVENANCE section of
-	linkgit:git-fetch[1].
-
-provenance.reasoning.push::
-	Whether linkgit:git-push[1] pushes the local reasoning records
-	(`refs/provenance/reasoning`) along with the line records.
-	Takes the same values as `provenance.reasoning.fetch`.
-	Defaults to `always`.  See the PROVENANCE section of
-	linkgit:git-push[1].
 
 provenance.require::
 	If true, linkgit:git-commit[1] refuses to make a commit that no

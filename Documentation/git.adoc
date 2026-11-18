@@ -42,11 +42,10 @@ extension; see "agit releases" below.
 
 agit releases
 -------------
-Provenance records, for each commit, the AI reasoning behind it and,
-for each changed line, whether an AI agent or a human wrote it. The
-records are kept outside the commit, so a repository remains a plain
-Git repository that any Git can use. The design is described in
-Documentation/technical/git-provenance.adoc.
+Provenance records, for each line a commit changes, whether an AI
+agent or a human wrote it. The records are kept outside the commit, so
+a repository remains a plain Git repository that any Git can use. The
+design is described in Documentation/technical/git-provenance.adoc.
 
 agit releases are cut on an upstream Git release and are versioned
 `<upstream version>.agit.<n>`, as reported by `git version`, where

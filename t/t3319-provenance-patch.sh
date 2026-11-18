@@ -231,7 +231,6 @@ test_expect_success 'am records the mailed record for the commit it makes' '
 	git provenance show ai >old.out &&
 	sed -e "s/^commit .*/commit $(git rev-parse HEAD)/" old.out >expect &&
 	check_lines HEAD &&
-	test_must_fail git provenance show --reasoning HEAD &&
 	git provenance verify HEAD
 '
 
@@ -365,12 +364,9 @@ test_expect_success 'fast-export --all and fast-import carry the records' '
 	git fast-export --all >all.out &&
 	git init all.git &&
 	git -C all.git fast-import --quiet <all.out &&
-	for ref in refs/provenance/lines refs/provenance/reasoning
-	do
-		git rev-parse $ref >expect &&
-		git -C all.git rev-parse $ref >actual &&
-		test_cmp expect actual || return 1
-	done &&
+	git rev-parse refs/provenance/lines >expect &&
+	git -C all.git rev-parse refs/provenance/lines >actual &&
+	test_cmp expect actual &&
 	git rev-list --branches >commits.out &&
 	git -C all.git provenance verify $(cat commits.out) &&
 	git log -p --provenance --branches >expect &&

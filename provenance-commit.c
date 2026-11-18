@@ -19,46 +19,23 @@
 #include "strbuf.h"
 
 /*
- * Read the records of `commit` into `lines` and `reasoning`, and set
- * `has_reasoning` if it has a reasoning record.  Returns 1 if it has a
- * line record, 0 if it has none or one that cannot be parsed, and -1
- * if they cannot be read.
+ * Read the line record of `commit` into `lines`.  Returns 1 if it has
+ * one, 0 if it has none or one that cannot be parsed, and -1 if it
+ * cannot be read.
  */
 static int read_source(struct repository *r, struct commit *commit,
-		       struct provenance_record *lines,
-		       struct provenance_reasoning *reasoning,
-		       int *has_reasoning)
+		       struct provenance_record *lines)
 {
 	const struct object_id *oid = &commit->object.oid;
 	struct strbuf buf = STRBUF_INIT, err = STRBUF_INIT;
 	int ret;
 
-	*has_reasoning = 0;
 	ret = provenance_read_lines(r, oid, &buf);
 	if (ret > 0 &&
 	    provenance_record_parse(buf.buf, buf.len, r->hash_algo, lines, &err)) {
 		warning(_("ignoring the line record of %s: %s"),
 			oid_to_hex(oid), err.buf);
 		ret = 0;
-	}
-
-	strbuf_reset(&buf);
-	strbuf_reset(&err);
-	if (ret > 0) {
-		switch (provenance_read_reasoning(r, oid, &buf)) {
-		case -1:
-			ret = -1;
-			break;
-		case 1:
-			if (provenance_reasoning_parse(buf.buf, buf.len,
-						       r->hash_algo,
-						       reasoning, &err))
-				warning(_("ignoring the reasoning record of %s: %s"),
-					oid_to_hex(oid), err.buf);
-			else
-				*has_reasoning = 1;
-			break;
-		}
 	}
 
 	strbuf_release(&buf);
@@ -71,8 +48,7 @@ static int read_source(struct repository *r, struct commit *commit,
  * unless it is there already as such.
  */
 static void add_source(struct provenance_source **sources, size_t *nr,
-		       size_t *alloc, struct commit *commit, int tentative,
-		       int revert)
+		       size_t *alloc, struct commit *commit, int revert)
 {
 	for (size_t i = 0; i < *nr; i++)
 		if ((*sources)[i].commit == commit &&
@@ -81,7 +57,6 @@ static void add_source(struct provenance_source **sources, size_t *nr,
 	ALLOC_GROW(*sources, *nr + 1, *alloc);
 	memset(&(*sources)[*nr], 0, sizeof(**sources));
 	(*sources)[*nr].commit = commit;
-	(*sources)[*nr].tentative = tentative;
 	(*sources)[*nr].revert = !!revert;
 	(*nr)++;
 }
@@ -93,11 +68,9 @@ int provenance_commit_records(struct repository *r,
 			      const char *session,
 			      const struct provenance_rewrite *rw,
 			      struct provenance_journal *journal,
-			      struct provenance_record *lines,
-			      struct provenance_reasoning *reasoning)
+			      struct provenance_record *lines)
 {
 	struct provenance_record *records = NULL;
-	struct provenance_reasoning *reasonings = NULL;
 	struct provenance_source *sources = NULL;
 	size_t alloc = 0;
 	struct provenance_journal own = PROVENANCE_JOURNAL_INIT;
@@ -116,11 +89,11 @@ int provenance_commit_records(struct repository *r,
 	if (rw && rw->adopt && !rw->mail)
 		BUG("provenance: only a mail can be adopted");
 	if (rw && rw->mail)
-		add_source(&sources, &nr, &alloc, rw->mail, 0, 0);
+		add_source(&sources, &nr, &alloc, rw->mail, 0);
 	if (rw && rw->amend)
-		add_source(&sources, &nr, &alloc, rw->amend, 0, 0);
+		add_source(&sources, &nr, &alloc, rw->amend, 0);
 	if (rw && rw->pick)
-		add_source(&sources, &nr, &alloc, rw->pick, 0, rw->revert);
+		add_source(&sources, &nr, &alloc, rw->pick, rw->revert);
 	for (size_t i = 0; rw && i < rw->picks.nr; i++) {
 		const struct provenance_pick *pick = &rw->picks.items[i];
 		struct commit *c = lookup_commit_reference_gently(r, &pick->oid,
@@ -130,17 +103,12 @@ int provenance_commit_records(struct repository *r,
 			warning(_("ignoring the pick %s: not a commit"),
 				oid_to_hex(&pick->oid));
 		else
-			add_source(&sources, &nr, &alloc, c, 1, pick->revert);
+			add_source(&sources, &nr, &alloc, c, pick->revert);
 	}
 
 	/* the changes of a commit without a line record are UNKNOWN */
 	CALLOC_ARRAY(records, nr);
-	ALLOC_ARRAY(reasonings, nr);
-	for (size_t i = 0; i < nr; i++)
-		reasonings[i] = (struct provenance_reasoning)
-			PROVENANCE_REASONING_INIT;
 	for (size_t i = 0; i < nr; i++) {
-		int has_reasoning;
 		int has_lines;
 
 		if (rw && rw->mail) {
@@ -148,14 +116,12 @@ int provenance_commit_records(struct repository *r,
 			sources[i].lines = rw->mail_lines;
 			continue;
 		}
-		has_lines = read_source(r, sources[i].commit, &records[i],
-					&reasonings[i], &has_reasoning);
+		has_lines = read_source(r, sources[i].commit, &records[i]);
 		if (has_lines < 0) {
 			ret = -1;
 			goto out;
 		}
 		sources[i].lines = has_lines ? &records[i] : NULL;
-		sources[i].reasoning = has_reasoning ? &reasonings[i] : NULL;
 	}
 
 	if (split_ident_line(&ident, author, strlen(author))) {
@@ -174,16 +140,13 @@ int provenance_commit_records(struct repository *r,
 	     provenance_journal_read(r, journal)) ||
 	    provenance_attribute_rewrite(r, parents, tree, sources, nr,
 					 flags, journal, session,
-					 human, lines, reasoning))
+					 human, lines))
 		ret = -1;
 
 out:
-	for (size_t i = 0; i < nr; i++) {
+	for (size_t i = 0; i < nr; i++)
 		provenance_record_release(&records[i]);
-		provenance_reasoning_release(&reasonings[i]);
-	}
 	free(records);
-	free(reasonings);
 	free(sources);
 	provenance_journal_release(&own);
 	free(human);
@@ -192,8 +155,7 @@ out:
 
 /*
  * Write `record` as the note for `commit` under the notes ref `ref`,
- * or remove the note if `record` is NULL, and queue the update of
- * `ref` into `transaction`.
+ * and queue the update of `ref` into `transaction`.
  *
  * The notes commit is authored by the committer ident, not by the
  * environment's author: the records are written by whoever makes the
@@ -214,8 +176,7 @@ static int queue_note(struct repository *r,
 
 	if (refs_read_ref(get_main_ref_store(r), ref, &old_oid))
 		oidcpy(&old_oid, null_oid(r->hash_algo));
-	if (record &&
-	    odb_write_object(r->objects, record->buf, record->len,
+	if (odb_write_object(r->objects, record->buf, record->len,
 			     OBJ_BLOB, &blob_oid)) {
 		strbuf_addf(err, _("unable to write the record for '%s'"), ref);
 		return -1;
@@ -227,10 +188,7 @@ static int queue_note(struct repository *r,
 	 * load.
 	 */
 	init_notes(&t, ref, combine_notes_overwrite, NOTES_INIT_WRITABLE);
-	if (record)
-		add_note(&t, commit, &blob_oid, NULL);
-	else
-		remove_note(&t, commit->hash);
+	add_note(&t, commit, &blob_oid, NULL);
 	ret = write_notes_tree(&t, &tree_oid);
 	free_notes(&t);
 	if (ret) {
@@ -269,7 +227,6 @@ int provenance_queue_records(struct repository *r,
 			     struct ref_transaction *transaction,
 			     const struct object_id *commit,
 			     struct provenance_record *lines,
-			     struct provenance_reasoning *reasoning,
 			     const char *reflog_msg,
 			     struct strbuf *err)
 {
@@ -283,28 +240,6 @@ int provenance_queue_records(struct repository *r,
 	provenance_record_format(lines, &buf);
 	ret = queue_note(r, transaction, PROVENANCE_LINES_REF, commit,
 			 &buf, msg.buf, err);
-
-	strbuf_reset(&buf);
-	if (!ret && reasoning->sessions_nr) {
-		oidcpy(&reasoning->commit, commit);
-		provenance_reasoning_format(reasoning, &buf);
-		ret = queue_note(r, transaction, PROVENANCE_REASONING_REF,
-				 commit, &buf, msg.buf, err);
-	} else if (!ret) {
-		/* the two records of a commit must agree */
-		switch (provenance_read_reasoning(r, commit, &buf)) {
-		case -1:
-			strbuf_addf(err, _("unable to read the reasoning record of %s"),
-				    oid_to_hex(commit));
-			ret = -1;
-			break;
-		case 1:
-			ret = queue_note(r, transaction,
-					 PROVENANCE_REASONING_REF, commit,
-					 NULL, msg.buf, err);
-			break;
-		}
-	}
 
 	strbuf_release(&buf);
 	strbuf_release(&msg);

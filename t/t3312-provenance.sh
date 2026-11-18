@@ -7,20 +7,20 @@ test_description='Test provenance records'
 
 . ./test-lib.sh
 
-# Attach a record to a commit.  "git notes" only writes below
-# refs/notes/, so write the note through a scratch notes ref that
-# starts from the current provenance ref, point the provenance ref at
-# the resulting notes commit and delete the scratch ref.
+# Attach <file> as the line record of <commit>.  "git notes" only
+# writes below refs/notes/, so write the note through a scratch notes
+# ref that starts from the current provenance ref, point the provenance
+# ref at the resulting notes commit and delete the scratch ref.
 #
-# Usage: add_record (lines|reasoning) <commit> <file>
+# Usage: add_record <commit> <file>
 add_record () {
-	if git rev-parse -q --verify "refs/provenance/$1" >/dev/null
+	if git rev-parse -q --verify refs/provenance/lines >/dev/null
 	then
-		git update-ref "refs/notes/provenance-$1" "refs/provenance/$1"
+		git update-ref refs/notes/scratch refs/provenance/lines
 	fi &&
-	git notes --ref="provenance-$1" add -f --no-stripspace -F "$3" "$2" &&
-	git update-ref "refs/provenance/$1" "refs/notes/provenance-$1" &&
-	git update-ref -d "refs/notes/provenance-$1"
+	git notes --ref=scratch add -f --no-stripspace -F "$2" "$1" &&
+	git update-ref refs/provenance/lines refs/notes/scratch &&
+	git update-ref -d refs/notes/scratch
 }
 
 # Print the anchor of lines <a> to <b> of <rev>:<path>.
@@ -64,12 +64,11 @@ test_expect_success 'verify reports commits without a record' '
 
 test_expect_success 'show fails without a record' '
 	test_must_fail git provenance show HEAD 2>err &&
-	test_grep "no provenance record" err &&
-	test_must_fail git provenance show --reasoning HEAD
+	test_grep "no provenance record" err
 '
 
 test_expect_success 'show prints the record' '
-	add_record lines HEAD record &&
+	add_record HEAD record &&
 	git provenance show HEAD >actual &&
 	test_cmp record actual
 '
@@ -106,23 +105,9 @@ test_expect_success 'parser treats the observing tool as an opaque token' '
 	test_grep "line 3: malformed .capture. line" err
 '
 
-test_expect_success 'show --reasoning prints the reasoning record' '
-	cat >reasoning <<-EOF &&
-	version 1
-	commit $(git rev-parse HEAD)
-	session s1 model=some-model tool=some-tool started=1112911993 ended=1112912053
-
-	Capitalize the second line and add two more.
-	EOF
-	add_record reasoning HEAD reasoning &&
-	git provenance show --reasoning HEAD >actual &&
-	test_cmp reasoning actual
-'
-
 test_expect_success 'records are only kept below refs/provenance/' '
 	cat >expect <<-\EOF &&
 	refs/provenance/lines
-	refs/provenance/reasoning
 	EOF
 	git for-each-ref --format="%(refname)" refs/provenance/ refs/notes/ >actual &&
 	test_cmp expect actual
@@ -154,9 +139,9 @@ test_expect_success 'verify rejects an invalid argument' '
 # check that "verify" fails with <message>.
 test_verify_fails () {
 	test_expect_success "verify rejects $1" "
-		test_when_finished 'add_record lines HEAD record' &&
+		test_when_finished 'add_record HEAD record' &&
 		sed -e \"$2\" record >bad &&
-		add_record lines HEAD bad &&
+		add_record HEAD bad &&
 		test_must_fail git provenance verify HEAD >out 2>err &&
 		test_must_be_empty out &&
 		test_grep \"$3\" err
@@ -164,10 +149,10 @@ test_verify_fails () {
 }
 
 test_expect_success 'verify rejects a wrong commit field' '
-	test_when_finished "add_record lines HEAD record" &&
+	test_when_finished "add_record HEAD record" &&
 	parent=$(git rev-parse HEAD^) &&
 	sed -e "s/^commit .*/commit $parent/" record >bad &&
-	add_record lines HEAD bad &&
+	add_record HEAD bad &&
 	test_must_fail git provenance verify HEAD >out 2>err &&
 	test_must_be_empty out &&
 	test_grep "record names commit .$parent." err
@@ -206,17 +191,17 @@ test_verify_fails 'a malformed record' \
 	"unsupported version '2'"
 
 test_expect_success 'verify accepts UNKNOWN in any record' '
-	test_when_finished "add_record lines HEAD record" &&
+	test_when_finished "add_record HEAD record" &&
 	sed -e "s/ MIXED a1,h1 / UNKNOWN - /" record >unknown &&
-	add_record lines HEAD unknown &&
+	add_record HEAD unknown &&
 	git provenance verify HEAD
 '
 
 test_expect_success 'verify accepts UNKNOWN with capture adopted' '
-	test_when_finished "add_record lines HEAD record" &&
+	test_when_finished "add_record HEAD record" &&
 	sed -e "s/^capture .*/capture adopted/" \
 	    -e "s/ MIXED a1,h1 / UNKNOWN - /" record >adopted &&
-	add_record lines HEAD adopted &&
+	add_record HEAD adopted &&
 	git provenance verify HEAD
 '
 
@@ -229,7 +214,7 @@ test_expect_success 'verify rejects a - range on a root commit' '
 	file file
 	- 1 HUMAN h1 $(anchor HEAD^ file 1)
 	EOF
-	add_record lines HEAD^ root-record &&
+	add_record HEAD^ root-record &&
 	test_must_fail git provenance verify HEAD^ 2>err &&
 	test_grep "range in a root commit" err
 '
@@ -275,7 +260,7 @@ test_expect_success 'verify rejects a path that is not a regular file' '
 	file link
 	+ 1 HUMAN h1 $blob
 	EOF
-	add_record lines HEAD link-record &&
+	add_record HEAD link-record &&
 	test_must_fail git provenance verify HEAD 2>err &&
 	test_grep "path is not a regular file in the commit" err
 '

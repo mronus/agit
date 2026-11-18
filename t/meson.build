@@ -379,7 +379,6 @@ integration_tests = [
   't3319-provenance-patch.sh',
   't3320-notes-merge-worktrees.sh',
   't3321-notes-stripspace.sh',
-  't3322-provenance-purge.sh',
   't3323-provenance-stat.sh',
   't3324-provenance-remap.sh',
   't3325-provenance-head.sh',
