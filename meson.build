@@ -572,6 +572,7 @@ libgit_sources = [
   'transport-helper.c',
   'transport.c',
   'tree-diff.c',
+  'tree-verify.c',
   'tree-walk.c',
   'tree.c',
   'unpack-trees.c',
