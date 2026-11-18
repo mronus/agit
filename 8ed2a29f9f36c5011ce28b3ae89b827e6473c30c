@@ -1,0 +1,7 @@
+version 1
+commit 8ed2a29f9f36c5011ce28b3ae89b827e6473c30c
+capture observed git/2.56.0.agit.2
+actor human human ident=M. Abdullah Onus <mronus@gmail.com>
+file t/t3313-provenance-stamp.sh
++ 311-314 HUMAN human 37d41eba950431fc726c57fcfc8e2aa4731a6c1f
+- 311-313 HUMAN human afb8aaf68480a1fa4535746655dbda8f1c6d8c18
