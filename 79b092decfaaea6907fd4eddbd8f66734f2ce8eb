@@ -1,0 +1,7 @@
+version 1
+commit 79b092decfaaea6907fd4eddbd8f66734f2ce8eb
+capture observed git/2.56.0.agit.2
+actor a0256ef8-d274-460b-a4e6-84682b59e3d3 ai model=claude-opus-5-5 tool=claude-code session=a0256ef8-d274-460b-a4e6-84682b59e3d3 source=observed
+file t/t3313-provenance-stamp.sh
++ 311-314 AI a0256ef8-d274-460b-a4e6-84682b59e3d3 37d41eba950431fc726c57fcfc8e2aa4731a6c1f
+- 311-313 AI a0256ef8-d274-460b-a4e6-84682b59e3d3 afb8aaf68480a1fa4535746655dbda8f1c6d8c18
