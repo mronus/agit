@@ -308,9 +308,10 @@ test_expect_success 'list skips reason entries silently' '
 	claim s5 path file1
 	claim s5 path file2
 	EOF
-	list_entries >actual 2>err &&
-	test_cmp expect actual &&
-	test_must_be_empty err
+	git stamp list >list.out 2>err &&
+	test_must_be_empty err &&
+	list_entries >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'each stamp records the HEAD it was taken on' '
