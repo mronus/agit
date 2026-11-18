@@ -469,10 +469,10 @@ linux-provenance)
 	t5574.2 t5574.3 t5574.5 t5574.6 t5574.7 t5574.9 t5574.10
 	t5607.3
 	t5611.6 t5611.7 t5611.8
-	t5618.3 t5618.6
+	t5618.3 t5618.6 t5618.7 t5618.10
 	t5701.13 t5701.17
 	t5702.47
-	t5702.71 # the push retry fetches the provenance refs with v2
+	t5702.74 # the push retry fetches the provenance refs with v2
 	t6300.220 t6300.221 t6300.227 t6300.228 t6300.229 t6300.230
 	t6300.247 t6300.248 t6300.249 t6300.250 t6300.257
 	t6302 # for-each-ref output, in most of its tests
@@ -517,8 +517,8 @@ linux-provenance)
 	t5310.205 t5310.209 t5310.210 t5310.211
 	t5318.12 t5318.25 t5318.32 t5318.35 t5318.38 t5318.47
 	t5318.53 t5318.62 t5318.99 t5318.100
-	t5319.62 t5319.64 t5319.65 t5319.66 t5319.77 t5319.95 t5319.97
-	t5319.98
+	t5319.63 t5319.65 t5319.66 t5319.67 t5319.78 t5319.96 t5319.98
+	t5319.99
 	t5324 # commit counts, in most of its tests once its setup is skipped
 	t5326.46 t5326.48 t5326.49 t5326.50 t5326.91 t5326.167
 	t5326.220 t5326.222 t5326.223 t5326.224
@@ -536,7 +536,7 @@ linux-provenance)
 	t5500.43 t5500.44 t5500.46
 	t5501.2 t5501.3
 	t5502 # object counts, in most of its tests
-	t5537.12
+	t5537.13
 	t5538.7 t5538.8
 	t5552.6
 	t5604.14 t5604.16
@@ -544,8 +544,8 @@ linux-provenance)
 	t7700.26
 	t7703.7
 	t7704.2 t7704.12 t7704.14 t7704.15
-	t7705.3
-	t7900.19 t7900.31 t7900.52
+	t7705.5
+	t7900.19 t7900.31 t7900.54
 	# The Provenance: block of format-patch, in mails compared
 	# with what stock Git writes.
 	t4013.139 t4013.140 t4013.141 t4013.142 t4013.143 t4013.144
@@ -559,15 +559,15 @@ linux-provenance)
 	t9001.51 t9001.52 t9001.53
 	# Objects are deleted or packs crafted by hand, leaving the
 	# provenance refs pointing to objects that are gone.
-	t0410.11 t0410.13 t0410.14 t0410.15 t0410.27 t0410.40
+	t0410.11 t0410.13 t0410.14 t0410.15 t0410.27 t0410.41
 	t5616.47 t5616.48
 	t6011.6
 	t7700.13
-	t7900.27 t7900.53
+	t7900.27 t7900.55
 	# A depth-limited clone makes the tips of the provenance refs
 	# shallow as well, and the two clones list the same shallow
 	# points in another order.
-	t5601.99
+	t5601.107
 	EOF
 	)"
 	export GIT_SKIP_TESTS
