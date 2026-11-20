@@ -582,6 +582,13 @@ static int handle_config(const char *key, const char *value,
 					      &remote->negotiation_include);
 	} else if (!strcmp(subkey, "followremotehead")) {
 		const char *no_warn_branch;
+		/*
+		 * NEEDSWORK: this is validated/warned about here, during config
+		 * parsing, regardless of whether the fetch that triggered this
+		 * parse will ever consult it for this particular remote. See
+		 * fetch.c's deferred handling of fetch.followRemoteHEAD for the
+		 * pattern this should likely follow.
+		 */
 		if (!strcmp(value, "never"))
 			remote->follow_remote_head = FOLLOW_REMOTE_NEVER;
 		else if (!strcmp(value, "create"))
@@ -1960,6 +1967,31 @@ static char *tracking_for_push_dest(struct repository *repo,
 	return ret;
 }
 
+static char *branch_get_push_simple(struct repository *repo,
+				    struct remote *remote,
+				    struct branch *branch,
+				    struct strbuf *err)
+{
+	const char *up = NULL;
+	char *cur;
+
+	if (!strcmp(remote->name,
+		    remotes_remote_for_branch(repo->remote_state, branch, NULL))) {
+		up = branch_get_upstream(branch, err);
+		if (!up)
+			return NULL;
+	}
+	cur = tracking_for_push_dest(repo, remote, branch->refname, err);
+	if (!cur)
+		return NULL;
+	if (up && strcmp(cur, up)) {
+		free(cur);
+		return error_buf(err,
+				 _("cannot resolve 'simple' push to a single destination"));
+	}
+	return cur;
+}
+
 static char *branch_get_push_1(struct repository *repo,
 			       struct branch *branch, struct strbuf *err)
 {
@@ -2005,23 +2037,7 @@ static char *branch_get_push_1(struct repository *repo,
 
 	case PUSH_DEFAULT_UNSPECIFIED:
 	case PUSH_DEFAULT_SIMPLE:
-		{
-			const char *up;
-			char *cur;
-
-			up = branch_get_upstream(branch, err);
-			if (!up)
-				return NULL;
-			cur = tracking_for_push_dest(repo, remote, branch->refname, err);
-			if (!cur)
-				return NULL;
-			if (strcmp(cur, up)) {
-				free(cur);
-				return error_buf(err,
-						 _("cannot resolve 'simple' push to a single destination"));
-			}
-			return cur;
-		}
+		return branch_get_push_simple(repo, remote, branch, err);
 	}
 
 	BUG("unhandled push situation");

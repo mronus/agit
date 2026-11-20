@@ -127,8 +127,8 @@ Flags are the bitwise-or of:
 	`PARSE_OPT_STOP_AT_NON_OPTION` is set, the second argument in
 	`--unknown value` will be mistakenly interpreted as a
 	non-option, not as a value belonging to the unknown option,
-	the parser early.  That's why parse_options() errors out if
-	both options are set.
+	stopping the parser early.  That's why parse_options() errors
+	out if both options are set.
 	Note that non-option arguments are always kept, even without
 	this flag.
 
@@ -196,6 +196,11 @@ are the bitwise-or of:
 `PARSE_OPT_FROM_ALIAS`::
 	Internal flag, set on options that were expanded from a
 	configured alias. It should not be set by callers.
+
+`PARSE_OPT_EARLY`::
+	Report this option to `early_scan_options()`, which looks at a
+	few options before parsing the command line for real. Ignored
+	by `parse_options()` itself.
 
 `PARSE_OPT_NOCOMPLETE`::
 	Do not offer this option for completion.
