@@ -1,0 +1,40 @@
+agit v2.56.0.agit.3 Release Notes
+=================================
+
+This release of agit is based on Git v2.56.0 and the development of
+Git that followed it up to "The 22nd batch" (e1ec09b23c, 2026-11-16),
+which includes the fixes of Git v2.56.1.
+
+
+Backward compatibility notes
+----------------------------
+
+ * Provenance no longer records why a commit was made; it records, for
+   each line a commit adds or removes, whether an AI agent, a human,
+   or both wrote it.  "git stamp reason", "git provenance show
+   --reasoning", the "summary" field of "%(provenance:...)", "git
+   provenance purge", and the provenance.reasoning.fetch,
+   provenance.reasoning.push and advice.provenancePurge configuration
+   variables are gone.
+
+ * refs/provenance/reasoning and refs/provenance/remotes/<name>/reasoning
+   left by an earlier release are no longer read, fetched or pushed.
+   They can be deleted with "git update-ref -d <ref>", and on a remote
+   with "git push <remote> :refs/provenance/reasoning".
+
+ * "reason" entries that an earlier release wrote to the capture
+   journal are ignored, and dropped when the journal is next rewritten.
+
+
+Fixes since v2.56.0.agit.2
+--------------------------
+
+ * Each stamp now records the commit HEAD pointed at when it was taken.
+   Stamps taken on another commit than the one being committed, as
+   after an agent's change was stashed and the human switched branches,
+   are used by the content they describe, so that neither branch's
+   commit takes the other's lines.
+
+ * A "git stash push" that removes all the changes from the working
+   tree moves the stamps that describe them along with the stash, and
+   "git stash apply", "pop" and "branch" bring them back.
